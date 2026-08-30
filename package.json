@@ -1,0 +1,36 @@
+{
+  "name": "lightmark",
+  "version": "0.1.0",
+  "description": "光印 LightMark — AI 辅助的新手修图软件",
+  "author": "",
+  "license": "MIT",
+  "main": "src/main/main.js",
+  "scripts": {
+    "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:main\"",
+    "dev:renderer": "vite",
+    "dev:main": "wait-on tcp:5173 && cross-env LIGHTMARK_DEV=1 electron .",
+    "build": "vite build",
+    "preview": "vite preview",
+    "start": "npm run build && electron ."
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "electron": "^33.2.0",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.16",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3",
+    "wait-on": "^8.0.1"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "sharp": "^0.35.1"
+  }
+}

@@ -1,0 +1,66 @@
+// 全局类型定义
+
+// 一张照片在图库里的记录
+export interface Photo {
+  id: string
+  name: string
+  originalPath: string
+  thumbPath: string
+  ext: string
+  importedAt: number
+}
+
+// preload.js 通过 contextBridge 暴露到 window.lightmark 的能力
+export interface LightMarkApi {
+  version: string
+  pickImages: () => Promise<string[]>
+  importImages: (srcPaths: string[]) => Promise<Photo[]>
+  readLibrary: () => Promise<Photo[]>
+  readDataUrl: (filePath: string) => Promise<string | null>
+  removePhoto: (photoId: string) => Promise<boolean>
+
+  // 阶段 4：导出
+  // 渲染进程把处理好的全分辨率 RGBA 像素传过来，主进程用 sharp 编码写文件
+  // 返回保存路径，取消返回 null
+  exportPixels: (req: {
+    pixels: Uint8ClampedArray  // 处理后的 RGBA
+    width: number
+    height: number
+    options: import('./export').ExportOptions
+    suggestedName: string      // 建议文件名（不含扩展名）
+  }) => Promise<string | null>
+
+  // 选导出目录（批量用）
+  exportPickDir: () => Promise<string | null>
+
+  // 批量导出：一批像素数组写进指定目录
+  exportBatch: (req: {
+    dir: string
+    items: {
+      pixels: Uint8ClampedArray
+      width: number
+      height: number
+      options: import('./export').ExportOptions
+      suggestedName: string
+    }[]
+  }) => Promise<{ saved: string[]; skipped: number }>
+
+  // 阶段 4/5.2：参数持久化 .sidecar
+  // 阶段 5.2：存取的是 PhotoAdjust（{ global, masks }）。渲染层 normalize 兼容老 sidecar。
+  saveSidecar: (photoId: string, adjust: import('../image').PhotoAdjust) => Promise<boolean>
+  loadSidecar: (photoId: string) => Promise<unknown>
+
+  // 阶段 5.4：修图预设（用户预设落盘 presets.json）
+  // 预设只含 global + hsl，不含 masks。容错在渲染层 normalizePresetList。
+  loadPresets: () => Promise<unknown[]>
+  savePreset: (preset: import('./presets').Preset) => Promise<unknown[]>
+  deletePreset: (presetId: string) => Promise<unknown[]>
+}
+
+declare global {
+  interface Window {
+    lightmark: LightMarkApi
+  }
+}
+
+export {}

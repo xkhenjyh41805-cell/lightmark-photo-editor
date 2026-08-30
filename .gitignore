@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.vite/
+.claude/
+.npmrc
+.env
+.env.*
+!.env.example
+
+# Editor and OS files
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

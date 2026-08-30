@@ -1,0 +1,62 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  user-select: none;
+}
+
+/* 自定义 range slider：去掉原生轨道与拇指，露出下方自定义轨道层 */
+.lm-range {
+  outline: none;
+}
+.lm-range::-webkit-slider-runnable-track {
+  background: transparent;
+  height: 8px;
+}
+.lm-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  background: #e4e4e7; /* zinc-200 */
+  border: 2px solid #18181b;
+  margin-top: -3px;
+  cursor: grab;
+  transition: background 0.12s;
+}
+.lm-range:hover::-webkit-slider-thumb,
+.lm-range:focus-visible::-webkit-slider-thumb {
+  background: #fafafa;
+}
+.lm-range:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 2px #71717a; /* zinc-500 焦点环 */
+}
+.lm-range:active::-webkit-slider-thumb {
+  cursor: grabbing;
+}
+.lm-range::-moz-range-track {
+  background: transparent;
+  height: 8px;
+}
+.lm-range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  background: #e4e4e7;
+  border: 2px solid #18181b;
+  cursor: grab;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lm-range::-webkit-slider-thumb {
+    transition: none;
+  }
+}
