@@ -12,3 +12,7 @@ dist/
 .idea/
 Thumbs.db
 .DS_Store
+
+# Local scratch files
+.work/
+*.tmp

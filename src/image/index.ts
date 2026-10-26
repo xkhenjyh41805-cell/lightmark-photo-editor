@@ -111,14 +111,95 @@ export interface BrushGeom {
   feather: number
 }
 
-export type MaskGeom = GradientGeom | RadialGeom | BrushGeom
+// 栅格候选蒙版：由本地语义分割模型输出的低分辨率权重图。
+// data 是单通道 0~255 的 base64 编码；坐标仍随图片宽高归一化，因此预览和全分辨率导出一致。
+// strokes 叠加用户的绘制／擦除笔触，候选不能绕过人工校正。
+export interface RasterGeom {
+  type: 'raster'
+  width: number
+  height: number
+  data: string
+  strokes: BrushStroke[]
+  size: number
+  feather: number
+}
+
+export type MaskGeom = GradientGeom | RadialGeom | BrushGeom | RasterGeom
+
+export interface AutoMaskCandidate {
+  source: 'local-semantic-sky-v1'
+  target: 'sky'
+  status: 'pending'
+  modelId: string
+}
 
 // 一个局部滤镜
 export interface LocalMask {
   id: string
+  /** 用户命名的语义区域，例如“天空”“黑猫主体”。空字符串代表未命名，Agent 不可引用。 */
+  name?: string
   enabled: boolean
   geom: MaskGeom
   adjust: AdjustParams  // 复用全局 12 滑块，完整版
+  /** 候选状态下仅供用户检查，不能发送给 Agent 或参与实际修图。 */
+  candidate?: AutoMaskCandidate
+}
+
+export function normalizeMaskName(value: unknown): string {
+  if (typeof value !== 'string') return ''
+  return value.replace(/\s+/g, ' ').trim().slice(0, 32)
+}
+
+export function localMaskTypeLabel(mask: Pick<LocalMask, 'geom'>): string {
+  if (mask.geom.type === 'gradient') return '渐变蒙版'
+  if (mask.geom.type === 'radial') return '径向蒙版'
+  if (mask.geom.type === 'raster') return 'AI 候选蒙版'
+  return '笔刷蒙版'
+}
+
+export function localMaskDisplayName(mask: Pick<LocalMask, 'name' | 'geom'>): string {
+  return normalizeMaskName(mask.name) || `未命名${localMaskTypeLabel(mask)}`
+}
+
+/** 候选蒙版必须先由用户采纳，才能作为 Agent 可调用的语义区域。 */
+export function isMaskAgentAvailable(mask: LocalMask): boolean {
+  return mask.enabled && !mask.candidate && Boolean(normalizeMaskName(mask.name))
+}
+
+const RASTER_MASK_MAX_EDGE = 512
+
+export function encodeRasterMaskData(data: Uint8Array): string {
+  let binary = ''
+  const chunk = 0x8000
+  for (let i = 0; i < data.length; i += chunk) {
+    binary += String.fromCharCode(...data.subarray(i, Math.min(i + chunk, data.length)))
+  }
+  return btoa(binary)
+}
+
+function decodeRasterMaskData(data: string, expectedLength: number): Uint8Array | null {
+  if (typeof data !== 'string' || data.length > Math.ceil(expectedLength * 4 / 3) + 16) return null
+  try {
+    const binary = atob(data)
+    if (binary.length !== expectedLength) return null
+    const bytes = new Uint8Array(expectedLength)
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+    return bytes
+  } catch {
+    return null
+  }
+}
+
+function isValidRasterGeom(value: unknown): value is RasterGeom {
+  if (!value || typeof value !== 'object') return false
+  const raster = value as Partial<RasterGeom>
+  return raster.type === 'raster'
+    && Number.isInteger(raster.width) && Number.isInteger(raster.height)
+    && raster.width! >= 8 && raster.height! >= 8
+    && raster.width! <= RASTER_MASK_MAX_EDGE && raster.height! <= RASTER_MASK_MAX_EDGE
+    && typeof raster.data === 'string'
+    && Array.isArray(raster.strokes)
+    && typeof raster.size === 'number' && typeof raster.feather === 'number'
 }
 
 // ---- 阶段 5.3：HSL 分色调色（global-only）----
@@ -460,6 +541,7 @@ export function clonePhotoAdjust(a: PhotoAdjust): PhotoAdjust {
       if (m.geom.type === 'brush') {
         return {
           ...m,
+          name: normalizeMaskName(m.name),
           geom: {
             type: 'brush',
             size: m.geom.size,
@@ -474,7 +556,29 @@ export function clonePhotoAdjust(a: PhotoAdjust): PhotoAdjust {
           adjust: { ...m.adjust },
         }
       }
-      return { ...m, geom: { ...m.geom } as MaskGeom, adjust: { ...m.adjust } }
+      if (m.geom.type === 'raster') {
+        return {
+          ...m,
+          name: normalizeMaskName(m.name),
+          candidate: m.candidate ? { ...m.candidate } : undefined,
+          geom: {
+            type: 'raster',
+            width: m.geom.width,
+            height: m.geom.height,
+            data: m.geom.data,
+            size: m.geom.size,
+            feather: m.geom.feather,
+            strokes: m.geom.strokes.map((s) => ({
+              size: s.size,
+              feather: s.feather,
+              erase: s.erase,
+              points: s.points.map((p) => ({ x: p.x, y: p.y })),
+            })),
+          },
+          adjust: { ...m.adjust },
+        }
+      }
+      return { ...m, name: normalizeMaskName(m.name), geom: { ...m.geom } as MaskGeom, adjust: { ...m.adjust } }
     }),
   }
 }
@@ -485,7 +589,12 @@ export function normalizePhotoAdjust(raw: unknown): PhotoAdjust {
   const obj = raw as Record<string, unknown>
   // 新格式
   if (obj.global && typeof obj.global === 'object') {
-    const masks = Array.isArray(obj.masks) ? (obj.masks as LocalMask[]) : []
+    const masks = Array.isArray(obj.masks)
+      ? (obj.masks as LocalMask[]).filter((m) => {
+        if (!m || typeof m !== 'object' || typeof m.id !== 'string' || !m.geom || typeof m.geom !== 'object') return false
+        return (m.geom as MaskGeom).type !== 'raster' || isValidRasterGeom(m.geom)
+      }).map((m) => ({ ...m, name: normalizeMaskName(m.name) }))
+      : []
     return {
       geometry: normalizeGeometry(obj.geometry),
       global: { ...DEFAULT_PARAMS, ...(obj.global as Partial<AdjustParams>) },
@@ -509,6 +618,8 @@ export function buildMask(geom: MaskGeom, width: number, height: number): Float3
     buildGradientMask(geom, width, height, out)
   } else if (geom.type === 'radial') {
     buildRadialMask(geom, width, height, out)
+  } else if (geom.type === 'raster') {
+    buildRasterMask(geom, width, height, out)
   } else {
     buildBrushMask(geom, width, height, out)
   }
@@ -597,8 +708,12 @@ function buildRadialMask(r: RadialGeom, w: number, h: number, out: Float32Array)
 // 擦除笔触（erase=true）：用 (1-圆权重) 乘进去，把经过区域压低。
 // 两类笔触顺序应用：先叠加所有绘制笔触，再用擦除笔触减。
 function buildBrushMask(b: BrushGeom, w: number, h: number, out: Float32Array) {
+  applyBrushStrokes(b.strokes, w, h, out)
+}
+
+function applyBrushStrokes(strokes: BrushStroke[], w: number, h: number, out: Float32Array) {
   const maxSide = Math.max(w, h)
-  for (const stroke of b.strokes) {
+  for (const stroke of strokes) {
     const r = Math.max(1e-4, stroke.size) * maxSide
     const feather = Math.max(0, Math.min(1, stroke.feather))
     // 软边：圆心权重 1，到 r(1+0) 过渡。feather 控制过渡区宽度。
@@ -606,6 +721,33 @@ function buildBrushMask(b: BrushGeom, w: number, h: number, out: Float32Array) {
     const inner = r * (1 - feather)
     paintStroke(stroke, w, h, r, inner, stroke.erase, out)
   }
+}
+
+function buildRasterMask(raster: RasterGeom, w: number, h: number, out: Float32Array) {
+  const raw = isValidRasterGeom(raster)
+    ? decodeRasterMaskData(raster.data, raster.width * raster.height)
+    : null
+  if (!raw) return
+
+  // 候选以最多 512px 的边长存储；插值到预览或全分辨率导出，归一化坐标保持一致。
+  for (let y = 0; y < h; y++) {
+    const sy = ((y + 0.5) * raster.height) / h - 0.5
+    const y0 = Math.max(0, Math.floor(sy))
+    const y1 = Math.min(raster.height - 1, y0 + 1)
+    const fy = Math.max(0, Math.min(1, sy - y0))
+    for (let x = 0; x < w; x++) {
+      const sx = ((x + 0.5) * raster.width) / w - 0.5
+      const x0 = Math.max(0, Math.floor(sx))
+      const x1 = Math.min(raster.width - 1, x0 + 1)
+      const fx = Math.max(0, Math.min(1, sx - x0))
+      const a = raw[y0 * raster.width + x0] / 255
+      const b = raw[y0 * raster.width + x1] / 255
+      const c = raw[y1 * raster.width + x0] / 255
+      const d = raw[y1 * raster.width + x1] / 255
+      out[y * w + x] = (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + d * fx) * fy
+    }
+  }
+  applyBrushStrokes(raster.strokes, w, h, out)
 }
 
 // 把一条笔触画到权重图上。points 连成线段，沿段插值盖圆。

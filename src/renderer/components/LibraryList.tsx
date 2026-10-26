@@ -24,25 +24,25 @@ export function LibraryList({
   onImport,
 }: LibraryListProps) {
   return (
-    <aside className="flex w-56 shrink-0 flex-col border-r border-zinc-800 bg-zinc-950">
-      <div className="flex h-9 items-center justify-between px-3">
-        <span className="text-xs font-medium tracking-wide text-zinc-400">图库</span>
-        <span className="text-[10px] text-zinc-600">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex items-center justify-between gap-2 px-3 pb-2 pt-3">
+        <span className="truncate text-xs font-medium tracking-wide text-zinc-500">当前图库</span>
+        <span className="shrink-0 text-[10px] text-zinc-600">
           {photos.length} 张
           {selectedIds.length > 0 && ` · 选 ${selectedIds.length}`}
         </span>
       </div>
 
-      <div className="px-3 pb-2">
+      <div className="px-3 pb-3">
         <button
           onClick={onImport}
-          className="w-full rounded bg-zinc-800 px-3 py-2 text-xs font-medium text-zinc-100 transition-colors hover:bg-zinc-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500"
+          className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-800 shadow-sm transition-colors hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500"
         >
-          导入照片
+          ＋ 导入照片
         </button>
       </div>
 
-      <nav className="flex-1 overflow-y-auto px-2 pb-2">
+      <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
         {loading ? (
           <p className="px-2 py-4 text-xs text-zinc-600">加载中…</p>
         ) : photos.length === 0 ? (
@@ -65,7 +65,7 @@ export function LibraryList({
           </ul>
         )}
       </nav>
-    </aside>
+    </div>
   )
 }
 

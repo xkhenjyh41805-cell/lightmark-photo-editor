@@ -22,15 +22,28 @@ export function usePhotoLibrary() {
     }
   }, [])
 
-  const importFromDialog = useCallback(async () => {
-    const paths = await window.lightmark.pickImages()
-    if (paths.length === 0) return
+  const importPhotosFromPaths = useCallback(async (paths: string[]) => {
+    if (paths.length === 0) return null
     const added = await window.lightmark.importImages(paths)
-    if (added.length === 0) return
+    if (added.length === 0) return null
     setPhotos((prev) => [...prev, ...added])
     setSelectedId(added[added.length - 1].id)
-    return added.length
+    return added
   }, [])
+
+  const importPhotosFromDialog = useCallback(async () => {
+    const paths = await window.lightmark.pickImages()
+    return importPhotosFromPaths(paths)
+  }, [importPhotosFromPaths])
+
+  const replacePhoto = useCallback((updatedPhoto: Photo) => {
+    setPhotos((prev) => prev.map((photo) => photo.id === updatedPhoto.id ? updatedPhoto : photo))
+  }, [])
+
+  const importFromDialog = useCallback(async () => {
+    const added = await importPhotosFromDialog()
+    return added?.length ?? 0
+  }, [importPhotosFromDialog])
 
   const removePhoto = useCallback(
     async (photoId: string) => {
@@ -56,6 +69,9 @@ export function usePhotoLibrary() {
     setSelectedId,
     loading,
     importFromDialog,
+    importPhotosFromDialog,
+    importPhotosFromPaths,
+    replacePhoto,
     removePhoto,
   }
 }

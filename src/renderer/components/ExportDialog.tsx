@@ -13,6 +13,8 @@ interface ExportDialogProps {
   open: boolean
   photo: Photo
   count: number               // 本次导出几张（1=单张，>1=批量）
+  mode: 'new-group' | 'overwrite-original'
+  overwriteFormat?: ExportFormat
   initialOptions?: ExportOptions
   onConfirm: (options: ExportOptions) => Promise<void>
   onCancel: () => void
@@ -25,24 +27,30 @@ export function ExportDialog({
   open,
   photo,
   count,
+  mode,
+  overwriteFormat,
   initialOptions,
   onConfirm,
   onCancel,
 }: ExportDialogProps) {
-  const [opts, setOpts] = useState<ExportOptions>(
-    initialOptions ?? DEFAULT_EXPORT_OPTIONS,
-  )
+  const [opts, setOpts] = useState<ExportOptions>(() => mode === 'overwrite-original'
+    ? { ...DEFAULT_EXPORT_OPTIONS, format: overwriteFormat ?? 'jpeg', quality: 100, resizeMode: 'original', longEdge: 0 }
+    : initialOptions ?? DEFAULT_EXPORT_OPTIONS)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [overwriteConfirmed, setOverwriteConfirmed] = useState(false)
 
   // 每次打开重置为初始选项 + 清状态
   useEffect(() => {
     if (open) {
-      setOpts(initialOptions ?? DEFAULT_EXPORT_OPTIONS)
+      setOpts(mode === 'overwrite-original'
+        ? { ...DEFAULT_EXPORT_OPTIONS, format: overwriteFormat ?? 'jpeg', quality: 100, resizeMode: 'original', longEdge: 0 }
+        : initialOptions ?? DEFAULT_EXPORT_OPTIONS)
       setBusy(false)
       setError(null)
+      setOverwriteConfirmed(false)
     }
-  }, [open, initialOptions])
+  }, [open, mode, overwriteFormat, initialOptions])
 
   if (!open) return null
 
@@ -98,7 +106,7 @@ export function ExportDialog({
         {/* 标题 */}
         <div className="flex h-11 items-center justify-between border-b border-zinc-800 px-4">
           <h2 id="export-title" className="text-sm font-medium text-zinc-200">
-            {count > 1 ? `导出 ${count} 张照片` : '导出照片'}
+            {mode === 'overwrite-original' ? `覆盖 ${count > 1 ? `${count} 张` : '原图'}` : count > 1 ? `导出 ${count} 张照片为新的一组` : '导出为新的一组'}
           </h2>
           <span className="max-w-[220px] truncate text-[11px] text-zinc-500">
             {count > 1 ? `含 ${photo.name} 等 ${count} 张` : photo.name}
@@ -106,8 +114,8 @@ export function ExportDialog({
         </div>
 
         <div className="space-y-5 px-4 py-4">
-          {/* 预设 */}
-          <section>
+          {/* 预设只适用于导出新组；覆盖必须保持原格式与原尺寸。 */}
+          {mode === 'new-group' && <section>
             <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
               预设
             </h3>
@@ -137,7 +145,7 @@ export function ExportDialog({
                 )
               })}
             </div>
-          </section>
+          </section>}
 
           {/* 格式 */}
           <section>
@@ -150,11 +158,13 @@ export function ExportDialog({
                   key={f}
                   onClick={() => setFormat(f)}
                   aria-pressed={opts.format === f}
+                  disabled={mode === 'overwrite-original' && f !== overwriteFormat}
                   className={[
                     'flex-1 rounded border px-3 py-1.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500',
                     opts.format === f
                       ? 'border-zinc-400 bg-zinc-800 text-zinc-100'
                       : 'border-zinc-700 bg-zinc-950 text-zinc-400 hover:border-zinc-600',
+                    mode === 'overwrite-original' && f !== overwriteFormat ? 'cursor-not-allowed opacity-35' : '',
                   ].join(' ')}
                 >
                   {FORMAT_LABELS[f]}
@@ -164,7 +174,10 @@ export function ExportDialog({
           </section>
 
           {/* 尺寸 */}
-          <section>
+          {mode === 'overwrite-original' ? <section>
+            <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500">尺寸</h3>
+            <p className="text-xs text-zinc-300">覆盖时保持原图尺寸，避免缩放改变图库原图规格。</p>
+          </section> : <section>
             <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
               尺寸
             </h3>
@@ -201,7 +214,7 @@ export function ExportDialog({
                 px
               </label>
             </div>
-          </section>
+          </section>}
 
           {/* 画质（仅 jpeg/webp） */}
           {isLossy && (
@@ -235,6 +248,16 @@ export function ExportDialog({
               {error}
             </p>
           )}
+
+          {mode === 'overwrite-original' && (
+            <section className="space-y-3 rounded border border-amber-700/60 bg-amber-950/30 p-3">
+              <p className="text-xs leading-relaxed text-amber-200">这会替换 LightMark 私有图库中的原图副本，并保留覆盖前备份。导入时你电脑上的源文件不会被修改；成功后当前照片的修图参数和撤销历史将重置，避免重复套用。</p>
+              <label className="flex cursor-pointer items-start gap-2 text-xs leading-relaxed text-amber-100">
+                <input type="checkbox" checked={overwriteConfirmed} onChange={(event) => setOverwriteConfirmed(event.target.checked)} className="mt-0.5 accent-amber-500" />
+                <span>我确认覆盖 LightMark 图库中的原图副本。</span>
+              </label>
+            </section>
+          )}
         </div>
 
         {/* 操作 */}
@@ -248,10 +271,10 @@ export function ExportDialog({
           </button>
           <button
             onClick={handleConfirm}
-            disabled={busy}
+            disabled={busy || (mode === 'overwrite-original' && !overwriteConfirmed)}
             className="rounded bg-zinc-200 px-4 py-1.5 text-xs font-medium text-zinc-900 transition-colors hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 disabled:opacity-50"
           >
-            {busy ? '导出中…' : '导出'}
+            {busy ? mode === 'overwrite-original' ? '覆盖中…' : '导出中…' : mode === 'overwrite-original' ? '确认覆盖' : '导出为新的一组'}
           </button>
         </div>
       </div>

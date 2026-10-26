@@ -5,7 +5,7 @@ interface AdviceBarProps {
   onGotoStep?: (step: Advice['step']) => void
 }
 
-// AI 建议条：实时显示 advisor 给的一句话建议。
+// 本地规则提示：实时显示 advisor 给的一句话建议，不代表大模型分析。
 // 多条时只显示最高优先级那条，其余可展开看。
 // warn 红、tip 黄、ok 绿，颜色之外还有图标和文字，不靠颜色单一传达。
 const LEVEL_META = {
@@ -18,7 +18,7 @@ export function AdviceBar({ advices, onGotoStep }: AdviceBarProps) {
   if (advices.length === 0) {
     return (
       <div className="flex h-9 items-center border-b border-zinc-800 bg-zinc-950 px-3">
-        <span className="text-[11px] text-zinc-600">选一张照片开始，建议会自动出现。</span>
+        <span className="text-[11px] text-zinc-600">选一张照片开始，本地规则提示会自动出现。</span>
       </div>
     )
   }
@@ -36,7 +36,7 @@ export function AdviceBar({ advices, onGotoStep }: AdviceBarProps) {
         >
           {meta.icon}
         </span>
-        <span className="text-[11px] font-medium opacity-70">{meta.label}</span>
+        <span className="text-[11px] font-medium opacity-70">规则{meta.label}</span>
         <span className="flex-1 text-[12px] leading-tight">{top.text}</span>
         {top.step && onGotoStep && (
           <button

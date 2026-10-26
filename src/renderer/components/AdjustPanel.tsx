@@ -1,11 +1,11 @@
-import { useState } from 'react'
-import type { AdjustParams, LocalMask, HslParams, HslColorId, Geometry } from '../../image'
+import { useEffect, useState } from 'react'
+import { localMaskDisplayName, localMaskTypeLabel, normalizeMaskName, type AdjustParams, type LocalMask, type HslParams, type HslColorId, type Geometry } from '../../image'
 import { Slider } from './Slider'
 import { HistogramView } from './HistogramView'
 import { PresetPanel } from './PresetPanel'
+import { StepNav } from './StepNav'
 import type { Preset } from '../presets'
-import type { StepId, Mastery } from '../guidance'
-import { STEPS } from '../guidance'
+import type { StepId } from '../guidance'
 
 interface AdjustPanelProps {
   params: AdjustParams
@@ -14,7 +14,7 @@ interface AdjustPanelProps {
   hasAdjustment: boolean
   processedBuf: import('../../image').ImageBuf | null
   step: StepId
-  mastery: Mastery
+  onStep: (id: StepId) => void
 
   // 阶段 5.3：HSL 分色（global-only）
   hsl: HslParams
@@ -37,9 +37,18 @@ interface AdjustPanelProps {
   onAddRadial: () => void
   onAddBrush: () => void
   onSelectMask: (id: string) => void
+  onRenameMask: (id: string, name: string) => void
   onToggleMask: (id: string, enabled: boolean) => void
   onRemoveMask: (id: string) => void
   onMaskParam: (key: keyof AdjustParams, value: number) => void
+  // P1b POC：本地语义分割的天空候选，候选必须由用户采纳后才能启用／供 Agent 使用。
+  canGenerateSkyCandidate: boolean
+  skyCandidateStatus: import('../store/useSkyMaskCandidate').SkyCandidateStatus
+  skyCandidateDetail: string
+  skyCandidateProgress: number | null
+  onGenerateSkyCandidate: () => void
+  onCancelSkyCandidate: () => void
+  onAcceptMaskCandidate: (id: string) => void
   // 阶段 5.2b：笔刷
   brushErase: boolean
   onToggleBrushErase: (erase: boolean) => void
@@ -51,14 +60,13 @@ interface AdjustPanelProps {
   onEnterCrop: () => void
 }
 
-// 每个滑块的定义，含专业模式才显示的标记
+// 手动调整滑块的统一定义，不再按新手/专业模式隐藏参数。
 interface SliderDef {
   key: keyof AdjustParams
   label: string
   min: number
   max: number
   help: string
-  proOnly?: boolean
 }
 
 const GROUPS: { step: StepId; title: string; hint: string; items: SliderDef[] }[] = [
@@ -78,8 +86,8 @@ const GROUPS: { step: StepId; title: string; hint: string; items: SliderDef[] }[
     items: [
       { key: 'highlights', label: '高光', min: -100, max: 100, help: '只动亮部。压高光能救回天空细节。' },
       { key: 'shadows', label: '阴影', min: -100, max: 100, help: '只动暗部。提阴影能救回暗处细节。' },
-      { key: 'whites', label: '白色', min: -100, max: 100, help: '影响最亮端。专业模式可用。', proOnly: true },
-      { key: 'blacks', label: '黑色', min: -100, max: 100, help: '影响最暗端。专业模式可用。', proOnly: true },
+      { key: 'whites', label: '白色', min: -100, max: 100, help: '影响最亮端，微调画面最亮区域。' },
+      { key: 'blacks', label: '黑色', min: -100, max: 100, help: '影响最暗端，微调整体黑场。' },
     ],
   },
   {
@@ -120,12 +128,6 @@ const LOCAL_SLIDERS: SliderDef[] = [
   ...GROUPS[4].items,
 ]
 
-function maskLabel(m: LocalMask): string {
-  if (m.geom.type === 'gradient') return '渐变滤镜'
-  if (m.geom.type === 'radial') return '径向滤镜'
-  return '笔刷滤镜'
-}
-
 // HSL 8 色色块定义（顺序对应 HSL_COLOR_IDS 色相环）
 const HSL_SWATCHES: { id: HslColorId; label: string; css: string }[] = [
   { id: 'red', label: '红', css: '#ef4444' },
@@ -140,12 +142,14 @@ const HSL_SWATCHES: { id: HslColorId; label: string; css: string }[] = [
 
 export function AdjustPanel(props: AdjustPanelProps) {
   const {
-    params, onChange, onResetAll, hasAdjustment, processedBuf, step, mastery,
+    params, onChange, onResetAll, hasAdjustment, processedBuf, step, onStep,
     hsl, onHslParam, onResetHsl,
     presets, onApplyPreset, onSavePreset, onDeletePreset,
     localMode, masks, selectedMaskId,
     onEnterLocal, onExitLocal, onAddGradient, onAddRadial, onAddBrush,
-    onSelectMask, onToggleMask, onRemoveMask, onMaskParam,
+    onSelectMask, onRenameMask, onToggleMask, onRemoveMask, onMaskParam,
+    canGenerateSkyCandidate, skyCandidateStatus, skyCandidateDetail, skyCandidateProgress,
+    onGenerateSkyCandidate, onCancelSkyCandidate, onAcceptMaskCandidate,
     brushErase, onToggleBrushErase, onClearBrush, onBrushSize,
     hasGeometry, onEnterCrop,
   } = props
@@ -153,11 +157,23 @@ export function AdjustPanel(props: AdjustPanelProps) {
   // 当前选中的 HSL 颜色段
   const [hslColor, setHslColor] = useState<HslColorId>('red')
   const hslColorLabel = HSL_SWATCHES.find((s) => s.id === hslColor)!.label
+  const selectedForName = masks.find((m) => m.id === selectedMaskId) ?? null
+  const [maskNameDraft, setMaskNameDraft] = useState('')
+  useEffect(() => {
+    setMaskNameDraft(selectedForName?.name ?? '')
+  }, [selectedForName?.id, selectedForName?.name])
+  const commitMaskName = () => {
+    if (!selectedForName) return
+    const name = normalizeMaskName(maskNameDraft)
+    if (name !== selectedForName.name) onRenameMask(selectedForName.id, name)
+    setMaskNameDraft(name)
+  }
 
   // ---- 局部调整编辑模式 ----
   if (localMode) {
-    const selected = masks.find((m) => m.id === selectedMaskId) ?? null
-    const isPro = mastery === 'pro'
+    const selected = selectedForName
+    const isCandidate = Boolean(selected?.candidate)
+    const generating = skyCandidateStatus === 'preparing' || skyCandidateStatus === 'loading' || skyCandidateStatus === 'downloading' || skyCandidateStatus === 'segmenting'
     return (
       <aside className="flex w-64 shrink-0 flex-col border-l border-zinc-800 bg-zinc-950">
         <div className="flex h-9 items-center justify-between border-b border-zinc-800 px-3">
@@ -171,6 +187,39 @@ export function AdjustPanel(props: AdjustPanelProps) {
         </div>
 
         <div className="flex-1 overflow-y-auto px-3 py-3">
+          <section className="mb-4 rounded border border-sky-900/70 bg-sky-950/20 p-2.5">
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <h3 className="text-xs font-semibold text-sky-100">自动天空候选 · POC</h3>
+              <span className="text-[10px] text-sky-400">本地模型</span>
+            </div>
+            <p className="text-[10px] leading-relaxed text-zinc-400">
+              首次点击会下载并缓存本地分割模型；当前照片不会发送到你的对话模型、中转站或云端分割服务。生成后请按 Alt 检查红色覆盖范围，再决定采纳或删除。
+            </p>
+            {generating ? (
+              <div className="mt-2">
+                <div className="flex items-center justify-between gap-2 text-[10px] text-sky-200">
+                  <span>{skyCandidateDetail || '正在准备本地模型…'}</span>
+                  {skyCandidateProgress !== null && <span>{skyCandidateProgress}%</span>}
+                </div>
+                <button
+                  onClick={onCancelSkyCandidate}
+                  className="mt-2 w-full rounded border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-[11px] text-zinc-300 transition-colors hover:bg-zinc-800 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-zinc-500"
+                >
+                  取消本地候选
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={onGenerateSkyCandidate}
+                disabled={!canGenerateSkyCandidate}
+                className="mt-2 w-full rounded bg-sky-800/80 px-2 py-1.5 text-[11px] text-sky-50 transition-colors hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-sky-800/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sky-500"
+              >
+                生成天空候选蒙版
+              </button>
+            )}
+            {skyCandidateDetail && !generating && <p className="mt-2 text-[10px] leading-relaxed text-zinc-500">{skyCandidateDetail}</p>}
+          </section>
+
           {/* 新建滤镜 */}
           <section className="mb-4">
             <h3 className="mb-2 text-xs font-semibold text-zinc-300">新建</h3>
@@ -219,14 +268,16 @@ export function AdjustPanel(props: AdjustPanelProps) {
                         checked={m.enabled}
                         onChange={(e) => onToggleMask(m.id, e.target.checked)}
                         aria-label={`启用滤镜 ${i + 1}`}
-                        className="h-3.5 w-3.5 shrink-0 cursor-pointer accent-zinc-400"
+                        disabled={Boolean(m.candidate)}
+                        title={m.candidate ? '请先检查候选范围并点击“接受候选并启用”。' : undefined}
+                        className="h-3.5 w-3.5 shrink-0 cursor-pointer accent-zinc-400 disabled:cursor-not-allowed disabled:opacity-40"
                       />
                       <button
                         onClick={() => onSelectMask(m.id)}
                         className="flex-1 truncate text-left"
-                        title={maskLabel(m)}
+                        title={localMaskDisplayName(m)}
                       >
-                        {i + 1}. {maskLabel(m)}
+                        {i + 1}. {localMaskDisplayName(m)} {m.candidate ? '· 待确认' : ''}
                       </button>
                       <button
                         onClick={() => onRemoveMask(m.id)}
@@ -250,8 +301,49 @@ export function AdjustPanel(props: AdjustPanelProps) {
                 <span className="text-[10px] text-zinc-600">只影响蒙版内</span>
               </div>
 
+              {isCandidate && (
+                <div className="mb-3 rounded border border-amber-800/80 bg-amber-950/30 p-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-medium text-amber-100">天空候选 · 等待你检查</span>
+                    <span className="text-[10px] text-amber-400">未启用</span>
+                  </div>
+                  <p className="mt-1 text-[10px] leading-relaxed text-amber-100/70">
+                    按住 Alt 查看红色范围。可以先用下方笔刷补充或擦除，再采纳。采纳前不会影响照片，也不会发送给 Agent。
+                  </p>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    <button
+                      onClick={() => onAcceptMaskCandidate(selected.id)}
+                      className="rounded bg-amber-500/80 px-2 py-1.5 text-[11px] font-medium text-zinc-950 transition-colors hover:bg-amber-400 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-300"
+                    >
+                      接受候选并启用
+                    </button>
+                    <button
+                      onClick={() => onRemoveMask(selected.id)}
+                      className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-[11px] text-zinc-300 transition-colors hover:bg-zinc-800 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-zinc-500"
+                    >
+                      拒绝并删除
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <label className="mb-3 block text-[10px] text-zinc-400">
+                蒙版名称（给 Agent 识别区域）
+                <input
+                  aria-label="蒙版名称"
+                  value={maskNameDraft}
+                  maxLength={32}
+                  placeholder={`例如：天空、主体、背景（${localMaskTypeLabel(selected)}）`}
+                  onChange={(e) => setMaskNameDraft(e.target.value)}
+                  onBlur={commitMaskName}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur() } }}
+                  className="mt-1 w-full rounded border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-[11px] text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-sky-700"
+                />
+                <span className="mt-1 block leading-relaxed text-zinc-600">仅“已采纳、已启用且有名称”的蒙版会发给 Agent；Agent 只能改参数，不能画新区域、改几何或笔触。</span>
+              </label>
+
               {/* 笔刷专属工具：粗细、软度、绘制/擦除切换、清空 */}
-              {selected.geom.type === 'brush' && (() => {
+              {(selected.geom.type === 'brush' || selected.geom.type === 'raster') && (() => {
                 const bg = selected.geom
                 return (
                 <div className="mb-3 rounded border border-zinc-800 bg-zinc-900/50 p-2.5">
@@ -304,17 +396,18 @@ export function AdjustPanel(props: AdjustPanelProps) {
                     disabled={bg.strokes.length === 0}
                     className="mt-2 w-full rounded bg-zinc-800 px-2 py-1 text-[11px] text-zinc-300 transition-colors hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-zinc-800 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-zinc-500"
                   >
-                    清空笔触
+                    {selected.geom.type === 'raster' ? '清空手动修正' : '清空笔触'}
                   </button>
                   <p className="mt-2 text-[10px] leading-relaxed text-zinc-600">
-                    在预览图上涂抹。绘制加深影响区，擦除挖掉。
+                    {selected.geom.type === 'raster' ? '在候选范围上补画或擦除。候选本身不会被清空。' : '在预览图上涂抹。绘制加深影响区，擦除挖掉。'}
                   </p>
                 </div>
                 )
               })()}
 
-              <div className="space-y-3">
-                {LOCAL_SLIDERS.filter((it) => !it.proOnly || isPro).map((item) => (
+              {isCandidate && <p className="mb-2 text-[10px] text-zinc-500">采纳候选后才可调整局部参数并交给 Agent 使用。</p>}
+              <div className={isCandidate ? 'pointer-events-none space-y-3 opacity-40' : 'space-y-3'}>
+                {LOCAL_SLIDERS.map((item) => (
                   <Slider
                     key={item.key as string}
                     label={item.label}
@@ -344,18 +437,14 @@ export function AdjustPanel(props: AdjustPanelProps) {
   }
 
   // ---- 普通全图调整模式 ----
-  const stepIdx = STEPS.findIndex((s) => s.id === step)
   const group = GROUPS.find((g) => g.step === step) ?? GROUPS[0]
-  const visibleItems = group.items.filter((it) => !it.proOnly || mastery === 'pro')
+  const visibleItems = group.items
 
   return (
     <aside className="flex w-64 shrink-0 flex-col border-l border-zinc-800 bg-zinc-950">
       <div className="flex h-9 items-center justify-between border-b border-zinc-800 px-3">
         <div className="flex items-baseline gap-2">
           <span className="text-xs font-medium tracking-wide text-zinc-400">调整</span>
-          <span className="text-[10px] text-zinc-600">
-            {stepIdx + 1}/{STEPS.length}
-          </span>
         </div>
         <button
           onClick={onResetAll}
@@ -366,6 +455,8 @@ export function AdjustPanel(props: AdjustPanelProps) {
           重置
         </button>
       </div>
+
+      <StepNav step={step} onStep={onStep} />
 
       <div className="flex-1 overflow-y-auto px-3 py-3">
         <section className="mb-4">
@@ -394,12 +485,6 @@ export function AdjustPanel(props: AdjustPanelProps) {
               />
             ))}
           </div>
-          {mastery === 'novice' && group.items.some((it) => it.proOnly) && (
-            <p className="mt-3 text-[10px] leading-relaxed text-zinc-600">
-              切到专业模式可看到更多滑块。
-            </p>
-          )}
-
           {/* 阶段 5.3：HSL 分色。仅色彩步骤显示，global-only。 */}
           {group.step === 'color' && (
             <section className="mt-4 border-t border-zinc-800 pt-3">
@@ -432,18 +517,16 @@ export function AdjustPanel(props: AdjustPanelProps) {
                 ))}
               </div>
 
-              {/* 选中色的轴滑块：新手只露饱和度，专业露色相/饱和度/明度 */}
+              {/* 所有 HSL 轴均可直接访问，不再按模式隐藏。 */}
               <div className="space-y-3">
-                {mastery === 'pro' && (
-                  <Slider
-                    label="色相"
-                    help={`调整${hslColorLabel}色的色相偏移。正值偏暖一侧，负值偏冷一侧。`}
-                    value={hsl[hslColor].hue}
-                    min={-100}
-                    max={100}
-                    onChange={(v) => onHslParam(hslColor, 'hue', v)}
-                  />
-                )}
+                <Slider
+                  label="色相"
+                  help={`调整${hslColorLabel}色的色相偏移。正值偏暖一侧，负值偏冷一侧。`}
+                  value={hsl[hslColor].hue}
+                  min={-100}
+                  max={100}
+                  onChange={(v) => onHslParam(hslColor, 'hue', v)}
+                />
                 <Slider
                   label="饱和度"
                   help={`调整${hslColorLabel}色的浓淡。负值变灰，正值更鲜艳。`}
@@ -452,23 +535,15 @@ export function AdjustPanel(props: AdjustPanelProps) {
                   max={100}
                   onChange={(v) => onHslParam(hslColor, 'saturation', v)}
                 />
-                {mastery === 'pro' && (
-                  <Slider
-                    label="明度"
-                    help={`调整${hslColorLabel}色的明暗。负值压暗，正值提亮。`}
-                    value={hsl[hslColor].luminance}
-                    min={-100}
-                    max={100}
-                    onChange={(v) => onHslParam(hslColor, 'luminance', v)}
-                  />
-                )}
+                <Slider
+                  label="明度"
+                  help={`调整${hslColorLabel}色的明暗。负值压暗，正值提亮。`}
+                  value={hsl[hslColor].luminance}
+                  min={-100}
+                  max={100}
+                  onChange={(v) => onHslParam(hslColor, 'luminance', v)}
+                />
               </div>
-
-              {mastery === 'novice' && (
-                <p className="mt-2 text-[10px] leading-relaxed text-zinc-600">
-                  选中一种颜色，拖饱和度单独调它。切专业模式可调色相与明度。
-                </p>
-              )}
             </section>
           )}
         </section>

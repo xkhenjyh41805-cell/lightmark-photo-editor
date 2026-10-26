@@ -10,6 +10,8 @@
     "dev:renderer": "vite",
     "dev:main": "wait-on tcp:5173 && cross-env LIGHTMARK_DEV=1 electron .",
     "build": "vite build",
+    "test:agent": "node --experimental-strip-types src/agent/__tests__/plan.test.ts && node --experimental-strip-types src/agent/__tests__/provider.test.ts && node --experimental-strip-types src/agent/__tests__/history-timeline.test.ts && node --experimental-strip-types src/agent/__tests__/autoMask.test.ts && node --experimental-strip-types src/agent/__tests__/regionHints.test.ts && node --test src/agent/__tests__/transport.test.cjs",
+    "test:image": "node --experimental-strip-types src/image/__tests__/masks.test.ts && node --experimental-strip-types src/image/__tests__/regions.test.ts",
     "preview": "vite preview",
     "start": "npm run build && electron ."
   },
@@ -29,6 +31,7 @@
     "wait-on": "^8.0.1"
   },
   "dependencies": {
+    "@huggingface/transformers": "^4.3.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "sharp": "^0.35.1"

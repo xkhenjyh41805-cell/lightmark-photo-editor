@@ -9,6 +9,7 @@ import {
   isDefaultParams,
   isDefaultHsl,
   isDefaultGeometry,
+  normalizeMaskName,
   normalizePhotoAdjust,
   type LocalMask,
   type PhotoAdjust,
@@ -19,6 +20,7 @@ import {
 } from '../../image'
 import type { Photo } from '../types'
 import type { PresetAdjust } from '../presets'
+import { commitEdit, emptyHistory, undoEdit, redoEdit, transactionStatus, canUndoTransaction, canRedoTransaction, type EditHistory } from '../../agent/history'
 
 // 每张照片独立保存一组调整 = 全局参数 + 局部滤镜列表。
 // 非破坏性：原图不动，只存参数。以 photoId 为键。
@@ -39,6 +41,7 @@ function newMaskId(): string {
 export function makeGradientMask(): LocalMask {
   return {
     id: newMaskId(),
+    name: '',
     enabled: true,
     geom: {
       type: 'gradient',
@@ -56,6 +59,7 @@ export function makeGradientMask(): LocalMask {
 export function makeRadialMask(): LocalMask {
   return {
     id: newMaskId(),
+    name: '',
     enabled: true,
     geom: {
       type: 'radial',
@@ -76,6 +80,7 @@ export function makeRadialMask(): LocalMask {
 export function makeBrushMask(): LocalMask {
   return {
     id: newMaskId(),
+    name: '',
     enabled: true,
     geom: {
       type: 'brush',
@@ -87,77 +92,71 @@ export function makeBrushMask(): LocalMask {
   }
 }
 
+export function makeSkyCandidateMask(width: number, height: number, data: string, modelId: string): LocalMask {
+  return {
+    id: newMaskId(),
+    name: '天空（候选）',
+    enabled: false,
+    candidate: { source: 'local-semantic-sky-v1', target: 'sky', status: 'pending', modelId },
+    geom: {
+      type: 'raster',
+      width,
+      height,
+      data,
+      strokes: [],
+      size: 0.04,
+      feather: 0.45,
+    },
+    adjust: { ...DEFAULT_PARAMS },
+  }
+}
+
 export function useAdjustments() {
   // photoId -> 完整调整（global + masks）
-  const [adjustMap, setAdjustMap] = useState<Record<string, PhotoAdjust>>({})
+  const [adjustMap, publishAdjustMap] = useState<Record<string, PhotoAdjust>>({})
+  const adjustMapRef = useRef<Record<string, PhotoAdjust>>({})
+  // Run the update exactly once, outside React's repeatable state updater.
+  const setAdjustMap = useCallback((update: (current: Record<string, PhotoAdjust>) => Record<string, PhotoAdjust>) => {
+    const next = update(adjustMapRef.current)
+    adjustMapRef.current = next
+    publishAdjustMap(next)
+  }, [])
   const [loadedIds, setLoadedIds] = useState<Record<string, LoadState>>({})
   const dirtyRef = useRef<Set<string>>(new Set())
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const scheduleSave = useCallback((photoId: string) => {
+    dirtyRef.current.add(photoId)
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(() => {
+      const ids = Array.from(dirtyRef.current)
+      dirtyRef.current.clear()
+      for (const id of ids) {
+        const a = adjustMapRef.current[id]
+        if (a) window.lightmark.saveSidecar(id, a).catch(() => {})
+      }
+    }, 600)
+  }, [])
 
   // ---- 阶段 5.5：历史撤销/重做 ----
   // 每张照片独立的历史栈：past[] 存「更早的状态」，future[] 存「被 undo 掉的状态」。
   // 当前状态在 adjustMap[photoId]，不在栈里。
   // 上限 MAX_HISTORY：超出丢弃最旧，防止笔刷涂抹刷爆。
-  const MAX_HISTORY = 50
   // 合并窗口：同张照片 800ms 内的连续变更合并成一步历史。
   // 一次滑块拖动会触发几十次 setParam，没窗口的话一次拖动就吃掉几十格历史。
   const MERGE_WINDOW_MS = 800
-  const [historyMap, setHistoryMap] = useState<
-    Record<string, { past: PhotoAdjust[]; future: PhotoAdjust[] }>
-  >({})
+  const [historyMap, publishHistoryMap] = useState<Record<string, EditHistory>>({})
+  const historyMapRef = useRef<Record<string, EditHistory>>({})
+  const transactionSeqRef = useRef(0)
+  const newTransactionId = useCallback(() => `edit-${Date.now()}-${++transactionSeqRef.current}`, [])
+  const setHistory = useCallback((photoId: string, history: EditHistory) => {
+    const next = { ...historyMapRef.current, [photoId]: history }
+    historyMapRef.current = next
+    publishHistoryMap(next)
+  }, [])
   // 每张照片「上一次落历史的时间戳 + 上一次落历史前的状态快照」。
   // 用于判断本次变更是否落在合并窗口内：窗口内不新增历史项，而是让旧项的「起点」继续生效。
   const lastCommitRef = useRef<Record<string, { ts: number; before: PhotoAdjust }>>({})
-  // undo/redo 时把「被覆盖的当前状态」暂存进 ref，再在 effect 里写进对方栈。
-  // 因为 setAdjustMap 的 updater 闭包里能拿到 current，但 setHistoryMap 的 updater 里拿不到。
-  const pendingFutureRef = useRef<Record<string, PhotoAdjust>>({})
-  const pendingPastRef = useRef<Record<string, PhotoAdjust>>({})
-  const flushFutureSeqRef = useRef(0)
-  const flushPastSeqRef = useRef(0)
-  const flushFutureRef = useRef<Record<number, () => void>>({})
-  const flushPastRef = useRef<Record<number, () => void>>({})
-  const scheduleFlushFuture = useCallback(() => {
-    flushFutureSeqRef.current += 1
-    const seq = flushFutureSeqRef.current
-    flushFutureRef.current[seq] = () => {
-      setHistoryMap((prev) => {
-        const pending = pendingFutureRef.current
-        const out = { ...prev }
-        for (const pid of Object.keys(pending)) {
-          const cur = out[pid]
-          if (!cur) continue
-          const snap = pending[pid]
-          delete pending[pid]
-          out[pid] = { past: cur.past, future: [...cur.future, snap] }
-        }
-        return out
-      })
-      delete flushFutureRef.current[seq]
-    }
-    Promise.resolve().then(flushFutureRef.current[seq]!)
-  }, [])
-  const scheduleFlushPast = useCallback(() => {
-    flushPastSeqRef.current += 1
-    const seq = flushPastSeqRef.current
-    flushPastRef.current[seq] = () => {
-      setHistoryMap((prev) => {
-        const pending = pendingPastRef.current
-        const out = { ...prev }
-        for (const pid of Object.keys(pending)) {
-          const cur = out[pid]
-          if (!cur) continue
-          const snap = pending[pid]
-          delete pending[pid]
-          const past = [...cur.past, snap]
-          const trimmed = past.length > MAX_HISTORY ? past.slice(past.length - MAX_HISTORY) : past
-          out[pid] = { past: trimmed, future: cur.future }
-        }
-        return out
-      })
-      delete flushPastRef.current[seq]
-    }
-    Promise.resolve().then(flushPastRef.current[seq]!)
-  }, [])
 
   // 暴露给 UI 的撤销/重做可用性。state 派生，不另存。
   const canUndo = useCallback(
@@ -169,6 +168,11 @@ export function useAdjustments() {
     [historyMap],
   )
 
+  const isLoaded = useCallback(
+    (photoId: string | null): boolean => !!photoId && loadedIds[photoId] === 'loaded',
+    [loadedIds],
+  )
+
   // 把一次变更落进历史。
   // before = 变更前的快照（调用方在 setAdjustMap 之前用 clonePhotoAdjust 取）。
   // forceCoalesce=true 时无视时间窗口，一定与上一项合并（笔刷一条笔触内强制合并）。
@@ -177,64 +181,38 @@ export function useAdjustments() {
       const now = Date.now()
       const last = lastCommitRef.current[photoId]
       const inWindow = last && now - last.ts < MERGE_WINDOW_MS
-      if ((inWindow || forceCoalesce) && last) {
-        // 合并：不动 past（保留这批变更的起点），只刷新时间戳。
-        lastCommitRef.current[photoId] = { ts: now, before: last.before }
-        return
-      }
-      // 新增一步：把 before 推进 past，清空 future（新动作截断了重做分支）。
-      setHistoryMap((prev) => {
-        const cur = prev[photoId] ?? { past: [], future: [] }
-        const past = [...cur.past, before]
-        const trimmed = past.length > MAX_HISTORY ? past.slice(past.length - MAX_HISTORY) : past
-        return { ...prev, [photoId]: { past: trimmed, future: [] } }
-      })
-      lastCommitRef.current[photoId] = { ts: now, before }
+      const coalesce = Boolean((inWindow || forceCoalesce) && last)
+      setHistory(photoId, commitEdit(historyMapRef.current[photoId] ?? emptyHistory(), before, newTransactionId(), coalesce))
+      lastCommitRef.current[photoId] = { ts: now, before: coalesce ? last.before : clonePhotoAdjust(before) }
     },
-    [],
+    [setHistory, newTransactionId],
   )
 
   // 撤销：把 past 栈顶还原到 adjustMap，被覆盖的当前状态推进 future。
   const undo = useCallback((photoId: string) => {
-    setHistoryMap((prev) => {
-      const cur = prev[photoId]
-      if (!cur || cur.past.length === 0) return prev
-      const past = [...cur.past]
-      const target = past.pop()! // 要还原到的状态
-      // 在覆盖前先取当前快照进 future 暂存。updater 里能拿到最新 am。
-      setAdjustMap((am) => {
-        const current = am[photoId]
-        if (current) pendingFutureRef.current[photoId] = clonePhotoAdjust(current)
-        return { ...am, [photoId]: clonePhotoAdjust(target) }
-      })
-      lastCommitRef.current[photoId] = {
-        ts: Date.now(),
-        before: clonePhotoAdjust(target),
-      }
-      return { ...prev, [photoId]: { past, future: cur.future } }
-    })
-    scheduleFlushFuture()
-  }, [])
+    const current = adjustMapRef.current[photoId] ?? DEFAULT_PHOTO_ADJUST
+    const result = undoEdit(historyMapRef.current[photoId] ?? emptyHistory(), current)
+    if (!result) return
+    setHistory(photoId, result.history)
+    setAdjustMap((am) => ({ ...am, [photoId]: result.adjust }))
+    delete lastCommitRef.current[photoId]
+    scheduleSave(photoId)
+  }, [setHistory, setAdjustMap, scheduleSave])
 
   // 重做：把 future 栈顶还原到 adjustMap，被覆盖的当前状态推进 past。
   const redo = useCallback((photoId: string) => {
-    setHistoryMap((prev) => {
-      const cur = prev[photoId]
-      if (!cur || cur.future.length === 0) return prev
-      const future = [...cur.future]
-      const target = future.pop()! // 要还原到的状态
-      setAdjustMap((am) => {
-        const current = am[photoId]
-        if (current) pendingPastRef.current[photoId] = clonePhotoAdjust(current)
-        return { ...am, [photoId]: clonePhotoAdjust(target) }
-      })
-      lastCommitRef.current[photoId] = {
-        ts: Date.now(),
-        before: clonePhotoAdjust(target),
-      }
-      return { ...prev, [photoId]: { past: cur.past, future } }
-    })
-    scheduleFlushPast()
+    const current = adjustMapRef.current[photoId] ?? DEFAULT_PHOTO_ADJUST
+    const result = redoEdit(historyMapRef.current[photoId] ?? emptyHistory(), current)
+    if (!result) return
+    setHistory(photoId, result.history)
+    setAdjustMap((am) => ({ ...am, [photoId]: result.adjust }))
+    delete lastCommitRef.current[photoId]
+    scheduleSave(photoId)
+  }, [setHistory, setAdjustMap, scheduleSave])
+
+  const getTransactionState = useCallback((photoId: string, transactionId: string) => {
+    const h = historyMapRef.current[photoId] ?? emptyHistory()
+    return { status: transactionStatus(h, transactionId), canUndo: canUndoTransaction(h, transactionId), canRedo: canRedoTransaction(h, transactionId) }
   }, [])
 
   const getAdjust = useCallback(
@@ -284,24 +262,6 @@ export function useAdjustments() {
     },
     [loadedIds],
   )
-
-  const scheduleSave = useCallback((photoId: string) => {
-    dirtyRef.current.add(photoId)
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    saveTimerRef.current = setTimeout(() => {
-      const ids = Array.from(dirtyRef.current)
-      dirtyRef.current.clear()
-      for (const id of ids) {
-        setAdjustMap((cur) => {
-          const a = cur[id]
-          if (a) {
-            window.lightmark.saveSidecar(id, a).catch(() => {})
-          }
-          return cur
-        })
-      }
-    }, 600)
-  }, [])
 
   // 改单个全局滑块
   const setParam = useCallback(
@@ -443,8 +403,32 @@ export function useAdjustments() {
 
   // 拿某张的完整调整（导出全分辨率走 applyWithMasks 用）
   const getRawAdjust = useCallback(
-    (photoId: string): PhotoAdjust => adjustMap[photoId] ?? DEFAULT_PHOTO_ADJUST,
-    [adjustMap],
+    (photoId: string): PhotoAdjust => adjustMapRef.current[photoId] ?? DEFAULT_PHOTO_ADJUST,
+    [],
+  )
+
+  // 将 Agent 的整份候选状态作为一个独立事务提交，不与临近的滑杆历史合并。
+  // expectedBefore 用对象身份做 compare-and-swap，防止过期计划覆盖更晚的编辑。
+  const applyAgentTransaction = useCallback(
+    (photoId: string, expectedBefore: PhotoAdjust, next: PhotoAdjust): string | false => {
+      if (loadedIds[photoId] !== 'loaded') return false
+      const current = adjustMapRef.current[photoId] ?? DEFAULT_PHOTO_ADJUST
+      if (current !== expectedBefore) return false
+
+      const before = clonePhotoAdjust(current)
+      const after = clonePhotoAdjust(next)
+      const id = newTransactionId()
+      setHistory(photoId, commitEdit(historyMapRef.current[photoId] ?? emptyHistory(), before, id))
+      setAdjustMap((prev) => ({ ...prev, [photoId]: after }))
+      // 让下一次手动滑杆操作开启自己的历史记录，而非并入 Agent 事务。
+      lastCommitRef.current[photoId] = {
+        ts: Date.now() - MERGE_WINDOW_MS - 1,
+        before: clonePhotoAdjust(after),
+      }
+      scheduleSave(photoId)
+      return id
+    },
+    [loadedIds, scheduleSave, setAdjustMap, setHistory, newTransactionId],
   )
 
   // ---- 局部滤镜操作 ----
@@ -453,7 +437,7 @@ export function useAdjustments() {
       setAdjustMap((prev) => {
         const cur = prev[photoId] ?? DEFAULT_PHOTO_ADJUST
         commitHistory(photoId, cur)
-        return { ...prev, [photoId]: { ...cur, masks: [...cur.masks, mask] } }
+        return { ...prev, [photoId]: { ...cur, masks: [...cur.masks, { ...mask, name: normalizeMaskName(mask.name) }] } }
       })
       scheduleSave(photoId)
     },
@@ -469,7 +453,7 @@ export function useAdjustments() {
           ...prev,
           [photoId]: {
             ...cur,
-            masks: cur.masks.map((m) => (m.id === maskId ? { ...m, ...patch } : m)),
+            masks: cur.masks.map((m) => (m.id === maskId ? { ...m, ...patch, ...(patch.name === undefined ? {} : { name: normalizeMaskName(patch.name) }) } : m)),
           },
         }
       })
@@ -534,6 +518,35 @@ export function useAdjustments() {
     [scheduleSave, commitHistory],
   )
 
+  const acceptMaskCandidate = useCallback(
+    (photoId: string, maskId: string) => {
+      setAdjustMap((prev) => {
+        const cur = prev[photoId] ?? DEFAULT_PHOTO_ADJUST
+        const candidate = cur.masks.find((mask) => mask.id === maskId)?.candidate
+        if (!candidate) return prev
+        commitHistory(photoId, cur)
+        return {
+          ...prev,
+          [photoId]: {
+            ...cur,
+            masks: cur.masks.map((mask) => {
+              if (mask.id !== maskId) return mask
+              const currentName = normalizeMaskName(mask.name)
+              return {
+                ...mask,
+                enabled: true,
+                candidate: undefined,
+                name: currentName === '天空（候选）' ? '天空' : currentName || '天空',
+              }
+            }),
+          },
+        }
+      })
+      scheduleSave(photoId)
+    },
+    [scheduleSave, commitHistory],
+  )
+
   // ---- 笔刷专属操作 ----
   // 给某笔刷滤镜追加一条笔触（绘制或擦除）。传 null 则清空所有笔触。
   // 一条笔触 = 一次 pointerdown→pointerup，由调用方在 pointerup 时调一次，
@@ -548,7 +561,7 @@ export function useAdjustments() {
           [photoId]: {
             ...cur,
             masks: cur.masks.map((m) => {
-              if (m.id !== maskId || m.geom.type !== 'brush') return m
+              if (m.id !== maskId || (m.geom.type !== 'brush' && m.geom.type !== 'raster')) return m
               const strokes = stroke ? [...m.geom.strokes, stroke] : []
               return { ...m, geom: { ...m.geom, strokes } }
             }),
@@ -570,7 +583,7 @@ export function useAdjustments() {
           [photoId]: {
             ...cur,
             masks: cur.masks.map((m) =>
-              m.id === maskId && m.geom.type === 'brush'
+              m.id === maskId && (m.geom.type === 'brush' || m.geom.type === 'raster')
                 ? { ...m, geom: { ...m.geom, size, feather } }
                 : m,
             ),
@@ -596,12 +609,22 @@ export function useAdjustments() {
     [adjustMap],
   )
 
+  // 覆盖原图把当前效果烘焙进像素后，清掉旧调整和历史，避免打开后重复套用。
+  const clearPhotoAdjustments = useCallback((photoId: string) => {
+    const reset = clonePhotoAdjust(DEFAULT_PHOTO_ADJUST)
+    setAdjustMap((current) => ({ ...current, [photoId]: reset }))
+    setHistory(photoId, emptyHistory())
+    delete lastCommitRef.current[photoId]
+    dirtyRef.current.delete(photoId)
+    void window.lightmark.saveSidecar(photoId, reset).catch(() => {})
+  }, [setAdjustMap, setHistory])
+
   // 卸载时把还没写盘的 flush 掉
   useEffect(() => {
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
       for (const id of dirtyRef.current) {
-        const a = adjustMap[id]
+        const a = adjustMapRef.current[id]
         if (a) window.lightmark.saveSidecar(id, a).catch(() => {})
       }
     }
@@ -616,8 +639,11 @@ export function useAdjustments() {
     getGeometry,
     getRawParams,
     getRawAdjust,
+    isLoaded,
+    applyAgentTransaction,
     setParam,
     setParams,
+    getTransactionState,
     resetParams,
     resetHsl,
     resetGeometry,
@@ -630,6 +656,7 @@ export function useAdjustments() {
     updateMaskGeom,
     setMaskParam,
     removeMask,
+    acceptMaskCandidate,
     appendBrushStroke,
     setBrushSize,
     applyPreset,
@@ -637,5 +664,6 @@ export function useAdjustments() {
     redo,
     canUndo,
     canRedo,
+    clearPhotoAdjustments,
   }
 }

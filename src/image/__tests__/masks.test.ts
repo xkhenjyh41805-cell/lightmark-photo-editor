@@ -11,9 +11,11 @@ import {
   applyWithMasks,
   applyAdjustments,
   DEFAULT_PARAMS,
+  encodeRasterMaskData,
   type GradientGeom,
   type RadialGeom,
   type BrushGeom,
+  type RasterGeom,
   type BrushStroke,
   type LocalMask,
   type ImageBuf,
@@ -244,6 +246,45 @@ console.log('— 空笔刷蒙版 = 全权重 0 = 不影响 —')
     if (m[i] !== 0) { allZero = false; break }
   }
   assert(allZero, '无笔触时全 0')
+}
+
+console.log('— 栅格候选蒙版：缩放、笔刷校正和损坏数据隔离 —')
+{
+  const raw = new Uint8Array(8 * 8)
+  // 上半区作为“天空”候选，下面保持 0。
+  for (let y = 0; y < 4; y++) for (let x = 0; x < 8; x++) raw[y * 8 + x] = 255
+  const raster: RasterGeom = {
+    type: 'raster', width: 8, height: 8, data: encodeRasterMaskData(raw),
+    strokes: [], size: 0.08, feather: 0,
+  }
+  const scaled = buildMask(raster, 80, 80)
+  assert(scaled[10 * 80 + 40] > 0.9, `候选上半区应≈1，实际 ${scaled[10 * 80 + 40].toFixed(3)}`)
+  assert(scaled[70 * 80 + 40] < 0.1, `候选下半区应≈0，实际 ${scaled[70 * 80 + 40].toFixed(3)}`)
+
+  const corrected: RasterGeom = {
+    ...raster,
+    strokes: [
+      { points: [{ x: 0.5, y: 0.15 }], size: 0.1, feather: 0, erase: true },
+      { points: [{ x: 0.5, y: 0.8 }], size: 0.1, feather: 0, erase: false },
+    ],
+  }
+  const afterCorrection = buildMask(corrected, 80, 80)
+  assert(afterCorrection[12 * 80 + 40] < 0.1, '擦除笔触能从候选天空中挖出范围')
+  assert(afterCorrection[64 * 80 + 40] > 0.9, '绘制笔触能补充候选之外的范围')
+
+  const mask: LocalMask = {
+    id: 'sky-candidate', name: '天空', enabled: true, geom: raster,
+    adjust: { ...DEFAULT_PARAMS, highlights: -50 },
+  }
+  const source = grayImg(80, 80, 220)
+  const base = applyWithMasks(source, { ...DEFAULT_PARAMS }, [])
+  const edited = applyWithMasks(source, { ...DEFAULT_PARAMS }, [mask])
+  assert(edited.data[(10 * 80 + 40) * 4] !== base.data[(10 * 80 + 40) * 4], '栅格候选区域可应用局部传统参数')
+  assert(edited.data[(70 * 80 + 40) * 4] === base.data[(70 * 80 + 40) * 4], '候选外像素不受局部参数影响')
+
+  const invalid: RasterGeom = { ...raster, data: 'not-base64-and-not-a-valid-size' }
+  const rejected = buildMask(invalid, 80, 80)
+  assert(rejected.every((value) => value === 0), '损坏候选数据被隔离为全 0，不影响照片')
 }
 
 console.log(`\n结果：${pass} 通过，${fail} 失败`)

@@ -16,5 +16,5 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src/renderer", "src/image"]
+  "include": ["src/renderer", "src/image", "src/agent"]
 }

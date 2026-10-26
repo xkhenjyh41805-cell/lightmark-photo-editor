@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from 'react'
 import { useDataUrl } from '../store/useDataUrl'
 import type { Photo } from '../types'
 import {
@@ -23,6 +24,8 @@ interface PreviewAreaProps {
   adjust: PhotoAdjust
   // 处理后的 ImageBuf，提升给直方图组件用（实时）
   onProcessed?: (buf: ImageBuf | null) => void
+  showOriginal: boolean
+  onShowOriginalChange: (show: boolean) => void
 
   // 阶段 5.2：局部调整编辑模式
   localMode: boolean
@@ -43,18 +46,39 @@ interface PreviewAreaProps {
 }
 
 const PROXY_MAX = 1200
+const MIN_ZOOM = 1
+const MAX_ZOOM = 4
+
+function clampPreviewPan(viewport: HTMLElement | null, canvas: HTMLCanvasElement | null, pan: { x: number; y: number }, zoom: number) {
+  if (!viewport || !canvas) return pan
+  const style = window.getComputedStyle(viewport)
+  const width = viewport.clientWidth - (Number.parseFloat(style.paddingLeft) || 0) - (Number.parseFloat(style.paddingRight) || 0)
+  const height = viewport.clientHeight - (Number.parseFloat(style.paddingTop) || 0) - (Number.parseFloat(style.paddingBottom) || 0)
+  const maxX = Math.max(0, (canvas.offsetWidth * zoom - width) / 2)
+  const maxY = Math.max(0, (canvas.offsetHeight * zoom - height) / 2)
+  return {
+    x: Math.max(-maxX, Math.min(maxX, pan.x)),
+    y: Math.max(-maxY, Math.min(maxY, pan.y)),
+  }
+}
 
 export function PreviewArea(props: PreviewAreaProps) {
-  const { photo, adjust, onProcessed } = props
+  const { photo, adjust, onProcessed, showOriginal, onShowOriginalChange } = props
   const { localMode, masks, selectedMaskId, onUpdateMaskGeom } = props
   const { brushErase, onBrushStroke } = props
   const { cropMode, geometry, onUpdateGeometry, onExitCrop } = props
   const url = useDataUrl(photo?.originalPath ?? null)
+  const viewportRef = useRef<HTMLElement>(null)
+  const imageStageRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const proxyRef = useRef<ImageData | null>(null)
   const rafRef = useRef<number | null>(null)
-  const [showOriginal, setShowOriginal] = useState(false)
   const [showMask, setShowMask] = useState(false)
+  const [zoom, setZoom] = useState(MIN_ZOOM)
+  const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [isPanning, setIsPanning] = useState(false)
+  const panDragRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number } | null>(null)
+  const spacePanHeldRef = useRef(false)
   const [status, setStatus] = useState<'loading' | 'ready' | 'empty'>('empty')
   // 当前渲染输出的实际像素尺寸（变换后），供 renderMaskOverlay 同步 mask canvas backing store
   const outSizeRef = useRef<{ w: number; h: number } | null>(null)
@@ -66,15 +90,24 @@ export function PreviewArea(props: PreviewAreaProps) {
   const [overlayBox, setOverlayBox] = useState<{ w: number; h: number } | null>(null)
 
   useEffect(() => {
+    setZoom(MIN_ZOOM)
+    setPan({ x: 0, y: 0 })
+    setIsPanning(false)
+    panDragRef.current = null
+  }, [photo?.id])
+
+  useEffect(() => {
+    let cancelled = false
+    proxyRef.current = null
+    onProcessed?.(null)
     if (!url) {
-      proxyRef.current = null
       setStatus('empty')
-      onProcessed?.(null)
       return
     }
     setStatus('loading')
     const img = new Image()
     img.onload = () => {
+      if (cancelled) return
       const scale = Math.min(1, PROXY_MAX / Math.max(img.width, img.height))
       const w = Math.max(1, Math.round(img.width * scale))
       const h = Math.max(1, Math.round(img.height * scale))
@@ -85,12 +118,12 @@ export function PreviewArea(props: PreviewAreaProps) {
       ctx.drawImage(img, 0, 0, w, h)
       proxyRef.current = ctx.getImageData(0, 0, w, h)
       setStatus('ready')
-      render()
     }
-    img.onerror = () => setStatus('empty')
+    img.onerror = () => { if (!cancelled) setStatus('empty') }
     img.src = url
+    return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [url])
+  }, [url, photo?.id])
 
   const render = useCallback(() => {
     const proxy = proxyRef.current
@@ -119,14 +152,15 @@ export function PreviewArea(props: PreviewAreaProps) {
     outSizeRef.current = { w: out.width, h: out.height }
     ctx.putImageData(new ImageData(new Uint8ClampedArray(out.data), out.width, out.height), 0, 0)
 
-    onProcessed?.(out)
+    // Holding original comparison must not label unadjusted pixels as the current edit.
+    onProcessed?.(showOriginal ? null : out)
 
     // 蒙版预览 overlay
     renderMaskOverlay()
     // 同步 overlay 包装盒尺寸到主 canvas 的实际布局盒，保证 overlay 100% 对齐可见图像
     const cv = canvasRef.current
     if (cv) {
-      const rect = cv.getBoundingClientRect()
+      const rect = { width: cv.offsetWidth, height: cv.offsetHeight }
       setOverlayBox((cur) =>
         cur && Math.abs(cur.w - rect.width) < 0.5 && Math.abs(cur.h - rect.height) < 0.5
           ? cur
@@ -165,6 +199,7 @@ export function PreviewArea(props: PreviewAreaProps) {
   }, [showMask, localMode, masks, selectedMaskId])
 
   useEffect(() => {
+    if (status !== 'ready') return
     if (rafRef.current != null) return
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = null
@@ -176,14 +211,14 @@ export function PreviewArea(props: PreviewAreaProps) {
         rafRef.current = null
       }
     }
-  }, [render])
+  }, [render, status])
 
   // 用 ResizeObserver 跟踪主 canvas 布局盒，保证 overlay 包装盒随窗口/图片尺寸自适应
   useEffect(() => {
     const cv = canvasRef.current
     if (!cv) return
     const apply = () => {
-      const r = cv.getBoundingClientRect()
+      const r = { width: cv.offsetWidth, height: cv.offsetHeight }
       setOverlayBox((cur) =>
         cur && Math.abs(cur.w - r.width) < 0.5 && Math.abs(cur.h - r.height) < 0.5
           ? cur
@@ -204,34 +239,95 @@ export function PreviewArea(props: PreviewAreaProps) {
   // 按住 Alt 显示蒙版
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
+      const target = e.target
+      const isTypingTarget = target instanceof HTMLElement && (
+        target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(target.tagName)
+      )
+      if (e.code === 'Space' && !isTypingTarget) {
+        spacePanHeldRef.current = true
+        e.preventDefault()
+      }
       if (e.key === 'Alt' && !e.repeat) setShowMask(true)
     }
     const up = (e: KeyboardEvent) => {
+      if (e.code === 'Space') spacePanHeldRef.current = false
       if (e.key === 'Alt') setShowMask(false)
     }
+    const clearKeys = () => { spacePanHeldRef.current = false; setShowMask(false) }
     window.addEventListener('keydown', down)
     window.addEventListener('keyup', up)
+    window.addEventListener('blur', clearKeys)
     return () => {
       window.removeEventListener('keydown', down)
       window.removeEventListener('keyup', up)
+      window.removeEventListener('blur', clearKeys)
     }
   }, [])
 
-  const showO = () => setShowOriginal(true)
-  const hideO = () => setShowOriginal(false)
-  const toggleO = () => setShowOriginal((v) => !v)
+  const showO = () => onShowOriginalChange(true)
+  const hideO = () => onShowOriginalChange(false)
+  const handleWheel = (event: ReactWheelEvent<HTMLElement>) => {
+    if (!photo || status !== 'ready') return
+    if (!(event.target instanceof Node) || !imageStageRef.current?.contains(event.target)) return
+    event.preventDefault()
+    const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12
+    const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom * factor))
+    if (Math.abs(nextZoom - zoom) < 0.001) return
+    setZoom(nextZoom)
+    setPan((current) => nextZoom <= MIN_ZOOM
+      ? { x: 0, y: 0 }
+      : clampPreviewPan(viewportRef.current, canvasRef.current, current, nextZoom))
+  }
+  const handlePanStart = (event: ReactPointerEvent<HTMLElement>) => {
+    const spacePan = spacePanHeldRef.current
+    if (zoom <= MIN_ZOOM || event.button !== 0 || ((localMode || cropMode) && !spacePan)) return
+    if (!(event.target instanceof Node) || !imageStageRef.current?.contains(event.target)) return
+    if (!spacePan && !canvasRef.current?.contains(event.target)) return
+    if (event.target instanceof Element && event.target.closest('button, input, select, textarea')) return
+    event.preventDefault()
+    event.stopPropagation()
+    panDragRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, originX: pan.x, originY: pan.y }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setIsPanning(true)
+  }
+  const handlePanMove = (event: ReactPointerEvent<HTMLElement>) => {
+    const drag = panDragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    setPan(clampPreviewPan(viewportRef.current, canvasRef.current, {
+      x: drag.originX + event.clientX - drag.startX,
+      y: drag.originY + event.clientY - drag.startY,
+    }, zoom))
+  }
+  const handlePanEnd = (event: ReactPointerEvent<HTMLElement>) => {
+    const drag = panDragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    panDragRef.current = null
+    setIsPanning(false)
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+  }
 
   const selected = masks.find((m) => m.id === selectedMaskId) ?? null
-  const isBrush = selected?.geom.type === 'brush'
+  const isBrush = selected?.geom.type === 'brush' || selected?.geom.type === 'raster'
   return (
-    <main className="relative flex flex-1 items-center justify-center overflow-hidden bg-zinc-900 p-6">
+    <main
+      ref={viewportRef}
+      onWheel={handleWheel}
+      onPointerDownCapture={handlePanStart}
+      onPointerMove={handlePanMove}
+      onPointerUp={handlePanEnd}
+      onPointerCancel={handlePanEnd}
+      onLostPointerCapture={handlePanEnd}
+      aria-label="修图预览；滚动鼠标滚轮缩放，放大后拖动查看"
+      title="滚动鼠标滚轮缩放；放大后可拖动查看。局部蒙版或裁剪模式下，按住空格并拖动可平移。"
+      className={`lm-preview-viewport relative flex flex-1 items-center justify-center overflow-hidden bg-zinc-900 p-6${zoom > MIN_ZOOM && !localMode && !cropMode ? isPanning ? ' is-panning' : ' is-zoomed' : ''}`}
+    >
       {!photo ? (
         <EmptyState />
       ) : status === 'loading' ? (
         <p className="text-sm text-zinc-500">加载中…</p>
       ) : (
-        <div className="flex h-full w-full flex-col items-center justify-center gap-3">
-          <div className="relative flex min-h-0 min-w-0 max-w-full flex-1 items-center justify-center">
+        <div className="flex h-full w-full flex-col items-center justify-center">
+          <div ref={imageStageRef} className="relative flex min-h-0 min-w-0 max-w-full flex-1 items-center justify-center" style={{ transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`, transformOrigin: 'center center', transition: isPanning ? 'none' : 'transform 90ms ease-out' }}>
             {/*
               canvas 作为 well 的直接 flex 子项：well 在两轴都是定尺寸（flex-1 在定高列里，
               main 给了定高/定宽），canvas 的 max-w/h-full 相对真实 px 解析，浏览器按替换
@@ -240,9 +336,9 @@ export function PreviewArea(props: PreviewAreaProps) {
             */}
             <canvas
               ref={canvasRef}
-              onMouseDown={showO}
-              onMouseUp={hideO}
-              onMouseLeave={hideO}
+              onMouseDown={(event) => { if (zoom <= MIN_ZOOM && event.button === 0) showO() }}
+              onMouseUp={(event) => { if (zoom <= MIN_ZOOM && event.button === 0) hideO() }}
+              onMouseLeave={() => { if (zoom <= MIN_ZOOM) hideO() }}
               aria-label={`${photo.name} 预览，按住查看原图`}
               className="relative max-h-full max-w-full shadow-2xl"
               style={{ lineHeight: 0 }}
@@ -310,9 +406,14 @@ export function PreviewArea(props: PreviewAreaProps) {
                 蒙版预览
               </span>
             )}
+            {localMode && (
+              <span className="lm-canvas-hint pointer-events-none absolute bottom-2 left-1/2 -translate-x-1/2">
+                {isBrush ? '按住 Alt 查看蒙版' : '拖动控制点调整范围'}
+              </span>
+            )}
           </div>
-          <div className="flex shrink-0 items-center gap-4">
-            {cropMode && dispSize ? (
+          {cropMode && dispSize && (
+            <div className="lm-canvas-tools flex shrink-0 items-center gap-4">
               <CropToolbar
                 dispW={dispSize.w}
                 dispH={dispSize.h}
@@ -320,30 +421,8 @@ export function PreviewArea(props: PreviewAreaProps) {
                 onUpdate={onUpdateGeometry}
                 onExit={onExitCrop}
               />
-            ) : (
-              <>
-                <button
-                  onClick={toggleO}
-                  aria-pressed={showOriginal}
-                  className={[
-                    'rounded px-2.5 py-1 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-zinc-500',
-                    showOriginal
-                      ? 'bg-zinc-700 text-zinc-100'
-                      : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200',
-                  ].join(' ')}
-                >
-                  {showOriginal ? '正在看原图' : '对比原图'}
-                </button>
-                <p className="text-[11px] text-zinc-600">
-                  {localMode
-                    ? isBrush
-                      ? '在图上涂抹绘制区域。按住 Alt 查看红色蒙版。'
-                      : '拖控制点调范围。按住 Alt 查看红色蒙版。'
-                    : '按住图片或点按钮对比。拖右侧滑块实时调整。'}
-                </p>
-              </>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       )}
     </main>
@@ -367,7 +446,7 @@ function BrushCanvas({ mask, dispW, dispH, erase, onStroke }: BrushCanvasProps) 
   const curPtsRef = useRef<{ x: number; y: number }[]>([])
   const drawingRef = useRef(false)
 
-  const g = mask.geom as Extract<LocalMask['geom'], { type: 'brush' }>
+  const g = mask.geom as Extract<LocalMask['geom'], { type: 'brush' | 'raster' }>
   const size = g.size
   const feather = g.feather
 

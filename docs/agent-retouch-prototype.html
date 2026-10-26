@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>光印 LightMark — Agent 修图原型</title>
+<style>
+:root{color-scheme:dark;--bg:#101113;--panel:#191b1f;--panel2:#202329;--line:#2d3036;--text:#eceef2;--muted:#9299a5;--soft:#c0c5ce;--green:#84d7b0;--green2:#4eaf89;--blue:#93b6ff;--amber:#f0c36d;--red:#ee8787;--r:14px;font-family:Inter,"Segoe UI","Microsoft YaHei",sans-serif}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-size:13px}button,input,textarea{font:inherit}button{color:inherit;cursor:pointer}.shell{min-height:100vh;display:grid;grid-template-rows:58px 44px 1fr 36px;background:#111214}.topbar{display:flex;align-items:center;justify-content:space-between;padding:0 18px;border-bottom:1px solid #24262a;background:#17181b}.brand{display:flex;align-items:center;gap:12px;font-weight:700;font-size:15px}.brand-icon{width:27px;height:27px;border-radius:8px;background:linear-gradient(135deg,#83d9b3,#427f6a);display:grid;place-items:center;color:#15221d;font-weight:900}.brand small{font-size:11px;color:var(--muted);font-weight:500;margin-left:4px}.top-actions{display:flex;align-items:center;gap:9px}.iconbtn,.quiet,.primary,.outline,.pill{border:1px solid var(--line);border-radius:9px;background:#22242a;padding:8px 11px}.iconbtn{padding:7px 9px;color:#bfc4cc}.primary{background:#b0ecd0;color:#15251e;border-color:#b0ecd0;font-weight:700}.primary:hover{background:#c8f5df}.outline:hover,.quiet:hover,.iconbtn:hover{border-color:#59616c;background:#272a30}.quiet{background:transparent;color:var(--soft)}.toolbar{display:flex;align-items:center;justify-content:space-between;padding:0 18px;border-bottom:1px solid #26282d;background:#141518}.crumb{color:var(--muted)}.crumb strong{color:var(--soft);font-weight:600}.toolbar-right{display:flex;align-items:center;gap:8px;color:var(--muted)}.badge{border:1px solid #334b40;background:#1b3027;color:var(--green);padding:5px 9px;border-radius:20px;font-size:11px}.main{min-height:0;display:grid;grid-template-columns:202px minmax(420px,1fr) 382px;gap:1px;background:#292b30}.library,.stage,.agent{min-height:0;background:var(--bg)}.library{padding:16px 12px;background:#151619}.section-title{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#858c98;margin:2px 8px 12px;display:flex;justify-content:space-between}.photo-card{border:1px solid #34373e;border-radius:11px;overflow:hidden;background:#1d1f24;margin-bottom:10px;cursor:pointer}.photo-card.selected{border-color:#6cc39c;box-shadow:0 0 0 1px #6cc39c inset}.thumb{height:104px;overflow:hidden;background:#25272c}.thumb img{width:100%;height:100%;object-fit:cover;object-position:center 51%}.photo-meta{padding:9px 10px}.photo-name{font-size:12px;font-weight:600}.photo-sub{font-size:10px;color:#89909b;margin-top:4px}.photo-sub span{color:var(--green)}.add-photo{width:100%;text-align:center;border:1px dashed #454951;border-radius:10px;background:transparent;color:#aab0ba;padding:12px;margin-top:3px}.library-note{font-size:10px;line-height:1.55;color:#707782;margin:14px 8px}.stage{display:flex;flex-direction:column;padding:16px 18px 12px;min-width:0}.stage-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.stage-head h1{font-size:14px;margin:0;font-weight:600}.stage-head p{font-size:11px;color:var(--muted);margin:5px 0 0}.stage-tools{display:flex;gap:7px}.canvas{flex:1;min-height:260px;position:relative;display:grid;place-items:center;border:1px solid #303238;border-radius:13px;background:radial-gradient(ellipse at center,#25272c 0%,#17181b 73%);overflow:hidden}.photo-frame{height:100%;width:100%;max-height:calc(100vh - 255px);display:flex;align-items:center;justify-content:center;padding:18px}.photo-frame img{display:block;max-width:100%;max-height:100%;object-fit:contain;border-radius:3px;box-shadow:0 15px 45px #0008;transition:filter .35s ease}.canvas-tag{position:absolute;top:13px;left:13px;background:#111b;color:#d6d9df;border:1px solid #ffffff20;border-radius:7px;padding:6px 9px;font-size:10px;backdrop-filter:blur(10px)}.canvas-tag.right{left:auto;right:13px;color:#9be0bb}.canvas-hint{position:absolute;bottom:12px;left:50%;transform:translateX(-50%);background:#121316d9;border:1px solid #ffffff14;border-radius:8px;padding:7px 10px;font-size:10px;color:#b6bcc6;white-space:nowrap}.comparebar{display:flex;align-items:center;justify-content:center;gap:10px;margin:12px 0 0;color:#858c97;font-size:11px}.compare{border:1px solid #373a41;border-radius:8px;background:#202227;padding:7px 12px;color:#d8dbe1}.compare.active{border-color:#6cc39c;color:#b1ebd0}.histogram{height:62px;border:1px solid #292c31;background:#181a1e;border-radius:9px;margin-top:12px;padding:7px 10px;display:flex;align-items:center;gap:12px}.histogram-label{white-space:nowrap;font-size:10px;color:#89909a}.histogram svg{height:42px;width:100%}.agent{padding:16px 15px;display:flex;flex-direction:column;gap:11px;background:#18191d;border-left:1px solid #292b30;overflow:auto}.agent-head{display:flex;align-items:center;justify-content:space-between}.agent-title{display:flex;align-items:center;gap:9px;font-size:14px;font-weight:700}.spark{width:27px;height:27px;border-radius:9px;background:#263b32;color:var(--green);display:grid;place-items:center;font-size:15px}.agent-head small{font-size:10px;color:#a5adba}.session{border:1px solid #34373e;background:#1d1f24;border-radius:11px;padding:12px}.session-top{display:flex;align-items:center;justify-content:space-between;font-size:11px;color:#aeb4be;margin-bottom:8px}.state-dot{width:7px;height:7px;border-radius:50%;background:#75d0a4;display:inline-block;margin-right:6px}.session p{font-size:12px;line-height:1.6;color:#e1e4e9;margin:0}.session .subline{font-size:10px;color:#8e96a1;margin-top:7px}.sample-row{display:flex;gap:6px;flex-wrap:wrap}.pill{font-size:10px;padding:6px 8px;background:#202228;color:#c0c6d0;border-radius:16px}.pill:hover{border-color:#5b8f74;color:#b8e9cf}.input-wrap{border:1px solid #3b3e45;background:#202228;border-radius:11px;padding:10px}.input-wrap:focus-within{border-color:#6ebd98;box-shadow:0 0 0 2px #4b9a7520}.input-wrap textarea{width:100%;height:55px;resize:vertical;background:transparent;color:#e7e9ed;border:0;outline:0;font-size:12px;line-height:1.5}.input-bottom{display:flex;align-items:center;justify-content:space-between;color:#818894;font-size:10px}.mini-button{border:0;border-radius:7px;padding:7px 10px;background:#ace7c8;color:#15221b;font-weight:700;font-size:11px}.plan{border:1px solid #383b43;border-radius:12px;background:#1d1f24;overflow:hidden}.plan-top{padding:11px 12px;border-bottom:1px solid #33363d;display:flex;justify-content:space-between;align-items:center}.plan-top strong{font-size:12px}.plan-top span{font-size:10px;color:#a9d6bb}.plan-summary{padding:10px 12px 4px;color:#b8bec8;font-size:11px;line-height:1.5}.op{margin:8px 9px;border:1px solid #34373e;border-radius:9px;background:#22242a;padding:9px}.op-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.op-name{display:flex;align-items:center;gap:7px;font-size:11px;font-weight:600}.op-num{width:19px;height:19px;border-radius:6px;display:grid;place-items:center;background:#2b3b33;color:#a5e3bf;font-size:10px}.op-tools{color:#7f8792;font-size:9px;font-weight:400}.op-reason{color:#9097a2;font-size:10px;line-height:1.45;margin:7px 0}.range-row{display:grid;grid-template-columns:57px 1fr 36px;align-items:center;gap:8px;font-size:10px;color:#a8aeb7}.range-row input{width:100%;accent-color:#8fddb4;height:14px}.range-val{text-align:right;color:#cbd0d8;font-variant-numeric:tabular-nums}.plan-foot{font-size:9px;color:#7f8792;padding:1px 12px 11px;line-height:1.5}.plan-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px;padding:0 9px 10px}.plan-actions button{font-size:10px;padding:8px 6px;border-radius:8px}.plan-actions .apply{background:#a7e4c4;color:#15241c;border:1px solid #a7e4c4;font-weight:700}.plan-actions .revert{background:transparent;border:1px solid #41444c;color:#c2c7d0}.plan-actions .keep{grid-column:1/-1;background:#1e2722;border:1px solid #466a56;color:#b6e4c7}.plan-actions button:disabled{opacity:.42;cursor:not-allowed}.guard{border:1px solid #4a3b25;background:#292319;color:#d9bf89;border-radius:9px;padding:9px 10px;font-size:10px;line-height:1.5}.guard strong{color:#eed09a}.log{display:flex;gap:8px;color:#808792;font-size:10px;line-height:1.4;padding:0 2px}.log-icon{color:#80cfa4}.mask-card{display:flex;justify-content:space-between;align-items:center;color:#abb2bc;font-size:10px;border-top:1px solid #303239;padding:10px 2px 1px}.mask-card button{background:transparent;color:#96c8ab;border:0;font-size:10px}.toast{position:fixed;left:50%;bottom:49px;transform:translate(-50%,18px);opacity:0;background:#e3f5eb;color:#153021;padding:10px 14px;border-radius:9px;box-shadow:0 8px 24px #0006;transition:.22s;z-index:10;font-size:12px;pointer-events:none}.toast.show{opacity:1;transform:translate(-50%,0)}.statusbar{display:flex;align-items:center;justify-content:space-between;padding:0 16px;border-top:1px solid #292b30;background:#16171a;color:#7f8791;font-size:10px}.status-left{display:flex;gap:14px}.green{color:#84d7b0}.disabled{opacity:.42}.modal-shade{position:fixed;inset:0;background:#0009;display:none;align-items:center;justify-content:center;z-index:8}.modal-shade.open{display:flex}.modal{width:min(400px,calc(100vw - 32px));background:#202227;border:1px solid #444750;border-radius:14px;padding:18px;box-shadow:0 18px 60px #0009}.modal h2{font-size:14px;margin:0 0 7px}.modal p{font-size:11px;line-height:1.6;color:#aab1bb;margin:0}.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:15px}.modal-actions button{font-size:11px}.key{border:1px solid #484b53;border-radius:5px;padding:2px 5px;color:#aab0bb;font-size:9px}
+@media(max-width:1100px){.main{grid-template-columns:160px minmax(360px,1fr) 340px}.library{padding:12px 8px}.stage{padding:12px}.agent{padding:13px 11px}}
+@media(max-width:850px){.shell{height:auto;min-height:100vh;grid-template-rows:58px 42px auto 36px}.main{grid-template-columns:1fr}.library{display:none}.stage{height:68vh;min-height:430px}.agent{max-height:none;border-left:0;border-top:1px solid #303239}.photo-frame{max-height:58vh}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="topbar">
+    <div class="brand"><span class="brand-icon">光</span><span>光印 LightMark <small>Agent 修图原型</small></span></div>
+    <div class="top-actions"><button class="iconbtn" title="撤销本次 Agent 修图" id="topUndo">↶</button><button class="iconbtn" title="重做（原型未启用）">↷</button><span class="badge">主动修 · 默认　|　原型不连接模型</span><button class="quiet" id="exportBtn">导出</button></div>
+  </header>
+  <div class="toolbar"><div class="crumb">图库　/　<strong>DSC07653.jpg</strong></div><div class="toolbar-right"><span>编辑状态：</span><span class="green" id="editState">原图</span><span style="color:#565b64">·</span><span>非破坏式编辑 · 可撤销</span></div></div>
+  <main class="main">
+    <aside class="library">
+      <div class="section-title"><span>图库</span><span>1 张</span></div>
+      <div class="photo-card selected"><div class="thumb"><img src="./screenshots/agent-demo-photo.jpg" alt="黑猫坐在石板路上的示例照片"></div><div class="photo-meta"><div class="photo-name">DSC07653.jpg</div><div class="photo-sub">原图 · 24 MP　<span>已载入</span></div></div></div>
+      <button class="add-photo" id="addPhoto">＋　导入照片</button>
+      <p class="library-note">此原型使用项目截图中的示例照片。导入按钮仅用于演示，不会读取本地文件。</p>
+    </aside>
+    <section class="stage">
+      <div class="stage-head"><div><h1>照片预览</h1><p>侧栏 Agent 主动修 · 执行后可微调、对比或撤销</p></div><div class="stage-tools"><button class="iconbtn" id="fitBtn">适合窗口</button><button class="iconbtn" id="resetBtn">撤销本次修图</button></div></div>
+      <div class="canvas" id="canvas">
+        <span class="canvas-tag" id="imageTag">Agent 已调整</span><span class="canvas-tag right" id="previewTag" style="display:none">主动修结果</span>
+        <div class="photo-frame"><img id="previewImage" src="./screenshots/agent-demo-photo.jpg" alt="照片调整前后预览"></div>
+        <span class="canvas-hint" id="canvasHint">示例调整已主动应用；可对比或撤销</span>
+      </div>
+      <div class="comparebar"><span>原图与方案</span><button class="compare" id="compareBtn">按住／点击对比原图</button><span>处理方式：参数调整 · 不生成像素</span></div>
+      <div class="histogram"><span class="histogram-label">亮度直方图<br><span style="color:#69717c">预览示意</span></span><svg viewBox="0 0 420 50" preserveAspectRatio="none" aria-label="直方图示意"><defs><linearGradient id="hist" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#73c9a0" stop-opacity=".46"/><stop offset="1" stop-color="#73c9a0" stop-opacity=".02"/></linearGradient></defs><path d="M0 47 C15 44 22 38 34 36 S51 34 60 39 S76 44 89 38 S111 29 126 31 S146 38 157 34 S173 21 187 22 S203 33 217 28 S237 16 250 18 S269 30 281 26 S301 17 313 16 S331 26 344 22 S365 11 379 14 S397 27 420 7 L420 50 L0 50Z" fill="url(#hist)"/><path d="M0 47 C15 44 22 38 34 36 S51 34 60 39 S76 44 89 38 S111 29 126 31 S146 38 157 34 S173 21 187 22 S203 33 217 28 S237 16 250 18 S269 30 281 26 S301 17 313 16 S331 26 344 22 S365 11 379 14 S397 27 420 7" fill="none" stroke="#7ed3a7" stroke-width="1.5"/></svg></div>
+    </section>
+    <aside class="agent">
+      <div class="agent-head"><div class="agent-title"><span class="spark">✦</span><span>修图 Agent</span></div><small>主动修默认 · 建议模式后续加入</small></div>
+      <div class="session"><div class="session-top"><span><i class="state-dot"></i><span id="agentStatus">示例修图已完成 · 可撤销</span></span><span class="key">本地原型</span></div><p id="assistantMessage">我已按示例指令主动完成一组参数调整。结果已显示在画布上，你可以继续微调或撤销。</p><div class="subline">当前照片分析：使用现有直方图规则示意；未上传照片。</div></div>
+      <div class="sample-row"><button class="pill" data-prompt="整体提亮一点，暗部细节出来一些，颜色保持自然。">提亮暗部</button><button class="pill" data-prompt="颜色有点浓，饱和度稍微降低一点。">自然一点</button><button class="pill" data-prompt="轻微增加对比度，但保留暗部细节。">轻微加对比</button></div>
+      <div class="input-wrap"><textarea id="promptInput" placeholder="例如：整体提亮一点，颜色保持自然。"></textarea><div class="input-bottom"><span>提交后主动修，原图不变，可一键撤销</span><button class="mini-button" id="analyzeBtn">开始主动修图　↗</button></div></div>
+      <div class="plan" id="planCard">
+        <div class="plan-top"><strong>本次调整</strong><span id="planBadge">已应用</span></div>
+        <div class="plan-summary" id="planSummary">示例：轻微提亮并保留暗部细节；修改只在当前编辑状态中，可撤销。</div>
+        <div id="operations"></div>
+        <div class="plan-foot">仅调用现有参数工具；范围限制在 -100 至 +100。这里的画面效果由 CSS 滤镜模拟。</div>
+        <div class="plan-actions"><button class="apply" id="previewBtn">重新应用计划</button><button class="revert" id="revertBtn">撤销本次修图</button><button class="keep" id="keepBtn">继续对话微调</button></div>
+      </div>
+      <div class="guard"><strong>安全边界</strong><br>没有生成、重绘、换景或自动导出。真正接入模型后，参数仍会经过程序白名单和范围校验。</div>
+      <div class="log"><span class="log-icon">✓</span><span id="activityLog">本地演示：计划由固定规则模拟，并非真实大模型输出。</span></div>
+      <div class="mask-card"><span>局部蒙版：渐变 / 径向 / 笔刷</span><button id="maskInfo">查看说明　›</button></div>
+    </aside>
+  </main>
+  <footer class="statusbar"><div class="status-left"><span>LightMark Agent · 交互原型</span><span>手动修图引擎：项目已有</span><span class="green">原图保护：开启</span></div><div>用户描述 → Agent 主动修 → 查看、微调或撤销</div></footer>
+</div>
+<div class="toast" id="toast"></div>
+<div class="modal-shade" id="modalShade"><div class="modal"><h2 id="modalTitle">原型说明</h2><p id="modalText"></p><div class="modal-actions"><button class="quiet" id="modalClose">关闭</button></div></div></div>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const image = $('previewImage');
+  let plan = [];
+  let previewed = false;
+  let kept = false;
+  let compare = false;
+  let toastTimer;
+  const template = (id, name, tool, value, reason, label) => ({id,name,tool,value,reason,label});
+  function initialPlan(text='') {
+    const q = text.toLowerCase();
+    const result = [];
+    if (/饱和|颜色有点浓|自然一点/.test(q)) result.push(template('saturation','自然饱和度','adjust_global',-8,'轻微降低整体色彩强度，避免颜色显得过浓。','自然饱和度'));
+    if (/提亮|暗部|阴影|偏暗/.test(q) || result.length===0) result.push(template('exposure','整体曝光','adjust_global',12,'根据你的描述，小幅提升整体亮度。','曝光'));
+    if (/暗部|阴影|细节/.test(q)) result.push(template('shadows','阴影细节','adjust_global',14,'适度打开暗部层次，避免把阴影抬得过灰。','阴影'));
+    if (/对比/.test(q)) result.push(template('contrast','整体对比度','adjust_global',8,'轻微增强明暗分离，同时保留层次。','对比度'));
+    if (result.length===0) result.push(template('exposure','整体曝光','adjust_global',8,'先进行温和的基础校正，再由你预览决定是否保留。','曝光'));
+    return result;
+  }
+  function renderPlan() {
+    $('operations').innerHTML = plan.map((op,i)=>`<div class="op"><div class="op-head"><div class="op-name"><span class="op-num">${i+1}</span><span>${op.name}</span></div><span class="op-tools">工具：${op.tool}</span></div><div class="op-reason">${op.reason}</div><label class="range-row"><span>${op.label}</span><input type="range" min="-100" max="100" value="${op.value}" data-id="${op.id}" aria-label="调整${op.label}"><span class="range-val">${op.value>0?'+':''}${op.value}</span></label></div>`).join('');
+    $('operations').querySelectorAll('input[type=range]').forEach(el=>el.addEventListener('input',e=>{const op=plan.find(x=>x.id===e.target.dataset.id);op.value=Number(e.target.value);e.target.nextElementSibling.textContent=`${op.value>0?'+':''}${op.value}`;if(previewed)applyPreview();}));
+  }
+  function showToast(text){const t=$('toast');t.textContent=text;t.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),2300);}
+  function say(text){$('assistantMessage').textContent=text;}
+  function setPlanState(label,status){$('planBadge').textContent=label;$('agentStatus').textContent=status;}
+  function applyPreview(){
+    const values=Object.fromEntries(plan.map(op=>[op.id,op.value]));
+    const brightness=1+(values.exposure||0)*0.003+(values.shadows||0)*0.0012;
+    const contrast=1+(values.contrast||0)*0.003;
+    const saturation=1+(values.saturation||0)*0.003+(values.vibrance||0)*0.001;
+    image.style.filter=`brightness(${Math.max(.65,Math.min(1.5,brightness))}) contrast(${Math.max(.65,Math.min(1.4,contrast))}) saturate(${Math.max(.5,Math.min(1.5,saturation))})`;
+    $('imageTag').textContent=compare?'原图':'Agent 已调整';$('previewTag').style.display=compare?'none':'block';$('canvasHint').textContent=compare?'正在查看原图':'此效果由界面滤镜模拟，非真实图像算法';$('editState').textContent=kept?'已修好 · 可撤销':'调整中';$('editState').className='green';$('planBadge').textContent=kept?'已应用':'调整中';
+  }
+  function resetPreview(message=true){previewed=false;kept=false;compare=false;image.style.filter='none';$('imageTag').textContent='原图';$('previewTag').style.display='none';$('canvasHint').textContent='本次 Agent 调整已撤销';$('editState').textContent='原图';$('editState').className='green';$('compareBtn').classList.remove('active');setPlanState('已撤销','本次 Agent 修图已撤销');if(message)showToast('已撤销本次 Agent 修图，回到原图状态');}
+  $('analyzeBtn').addEventListener('click',()=>{
+    const text=$('promptInput').value.trim();if(!text){showToast('先写一句你希望如何调整照片');$('promptInput').focus();return;}
+    resetPreview(false);
+    if(/背景|主体|人物|人像|脸|局部/.test(text)){
+      plan=[];renderPlan();$('planSummary').textContent='这条指令需要先明确局部区域；目前不能自动识别人像或背景。';$('assistantMessage').textContent='我需要你先用现有的渐变、径向或笔刷蒙版手动选择区域。选区确认后，Agent 才能为该区域生成参数计划。';$('activityLog').textContent='尚未执行：等待用户明确选择修图区域。';setPlanState('需选区域','等待区域确认');$('previewBtn').disabled=true;return;
+    }
+    plan=initialPlan(text);renderPlan();$('planSummary').textContent=`理解为：「${text}」已主动应用；你可以改参数、继续对话或撤销。`;$('assistantMessage').textContent='我已把你的描述转换成安全的全局参数并主动应用到当前编辑结果。你可以检查变化、调整参数，或撤销这一组操作。';$('activityLog').textContent='修图计划由固定规则模拟；没有向模型发送照片或请求。';previewed=true;kept=true;compare=false;$('compareBtn').classList.remove('active');$('previewBtn').disabled=false;setPlanState('已应用','主动修图已完成 · 可撤销');applyPreview();showToast('Agent 已主动修图；原图保持不变，可随时撤销');
+  });
+  $('previewBtn').addEventListener('click',()=>{if(!plan.length)return;previewed=true;kept=true;compare=false;$('compareBtn').classList.remove('active');applyPreview();say('已重新应用当前参数。真实版本会在当前非破坏式编辑状态中更新，并保留一键撤销。');$('activityLog').textContent='效果仍由 CSS 滤镜模拟；真实版本应调用本地 processPhoto 图像管线。';showToast('当前调整已重新应用，原图未修改');});
+  $('revertBtn').addEventListener('click',()=>resetPreview(true));
+  $('keepBtn').addEventListener('click',()=>{$('promptInput').focus();showToast('继续输入修改要求，Agent 会基于当前结果继续调整');});
+  $('compareBtn').addEventListener('click',()=>{if(!previewed){showToast('先预览一个方案，再进行前后对比');return;}compare=!compare;$('compareBtn').classList.toggle('active',compare);if(compare){image.style.filter='none';$('imageTag').textContent='原图';$('previewTag').style.display='none';$('canvasHint').textContent='原图对比中';}else applyPreview();});
+  $('topUndo').addEventListener('click',()=>resetPreview(true));$('resetBtn').addEventListener('click',()=>resetPreview(true));$('fitBtn').addEventListener('click',()=>showToast('示例照片已适合窗口显示'));
+  document.querySelectorAll('[data-prompt]').forEach(btn=>btn.addEventListener('click',()=>{$('promptInput').value=btn.dataset.prompt;$('promptInput').focus();}));
+  function openModal(title,text){$('modalTitle').textContent=title;$('modalText').textContent=text;$('modalShade').classList.add('open');}
+  $('maskInfo').addEventListener('click',()=>openModal('局部蒙版说明','真实版本可先让多模态模型理解“背景”“黑猫”等目标，再由分割模型生成像素级 mask，并在画布上叠加给用户修正或确认。当前原型没有接入自动分割；区域不确定时不会应用全局参数代替。'));
+  $('exportBtn').addEventListener('click',()=>openModal('导出未启用','此原型只演示 Agent 主动修图、参数查看和撤销；不会导出、覆盖或保存图片。真实产品仍由用户单独触发导出。'));
+  $('addPhoto').addEventListener('click',()=>openModal('导入未启用','此原型使用随附的项目示例照片，不会读取本地文件。'));
+  $('modalClose').addEventListener('click',()=>$('modalShade').classList.remove('open'));$('modalShade').addEventListener('click',e=>{if(e.target===$('modalShade'))$('modalShade').classList.remove('open');});
+  plan=initialPlan('整体提亮一点，暗部细节出来一些，颜色保持自然。');renderPlan();previewed=true;kept=true;applyPreview();setPlanState('已应用','示例修图已完成 · 可撤销');
+})();
+</script>
+</body>
+</html>
